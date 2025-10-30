@@ -1,23 +1,33 @@
+enum FeedingSource { breast, expressed }
+
 class FeedingEntry {
   final int? id;
-  final DateTime time;
+  final DateTime startTime;
+  final DateTime? endTime;
+  final FeedingSource source;
 
   FeedingEntry({
     this.id,
-    required this.time,
+    required this.startTime,
+    this.endTime,
+    required this.source,
   });
 
   Map<String, dynamic> toMap() {
     return {
       'id': id,
-      'time': time.toIso8601String(),
+      'startTime': startTime.toIso8601String(),
+      'endTime': endTime?.toIso8601String(),
+      'source': source.name, // Store enum as string
     };
   }
 
   static FeedingEntry fromMap(Map<String, dynamic> map) {
     return FeedingEntry(
       id: map['id'],
-      time: DateTime.parse(map['time']),
+      startTime: DateTime.parse(map['startTime']),
+      endTime: map['endTime'] != null ? DateTime.parse(map['endTime']) : null,
+      source: FeedingSource.values.byName(map['source'] as String),
     );
   }
 }
