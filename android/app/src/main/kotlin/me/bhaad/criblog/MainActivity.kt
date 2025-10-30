@@ -1,4 +1,4 @@
-package com.example.criblog
+package me.bhaad.criblog
 
 import io.flutter.embedding.android.FlutterActivity
 

@@ -6,13 +6,14 @@ plugins {
 }
 
 android {
-    namespace = "com.example.criblog"
+    namespace = "me.bhaad.criblog"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
+        isCoreLibraryDesugaringEnabled = true
     }
 
     kotlinOptions {
@@ -31,12 +32,38 @@ android {
     }
 
     buildTypes {
-        release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
+        getByName("release") {
+            isShrinkResources = true
+            isMinifyEnabled = true // ← must be true if shrinkResources is true
             signingConfig = signingConfigs.getByName("debug")
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        }
+
+        getByName("debug") {
+            signingConfig = signingConfigs.getByName("debug")
+            applicationIdSuffix = ".debug"
+            isDebuggable = true
         }
     }
+
+    // Customize APK output file names
+    android.applicationVariants.all {
+        outputs.forEach { output ->
+            val buildTypeName = buildType.name
+            val apkName = if (buildTypeName == "debug") {
+                "criblog-debug.apk"
+            } else {
+                "criblog-release.apk"
+            }
+
+            // Cast to InternalArtifactType to access outputFileName
+            (output as com.android.build.gradle.internal.api.BaseVariantOutputImpl).outputFileName = apkName
+        }
+    }
+}
+
+dependencies {
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
 }
 
 flutter {
