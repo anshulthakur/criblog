@@ -24,4 +24,19 @@ class SleepEntry {
       endTime: map['endTime'] != null ? DateTime.parse(map['endTime']) : null,
     );
   }
+
+
+  SleepEntry insertWithId(int id) => SleepEntry(
+    id: id,
+    startTime: startTime,
+    endTime: endTime,
+  );
+
+  SleepEntry copyWith({int? id, DateTime? startTime, DateTime? endTime}) {
+    return SleepEntry(
+      id: id ?? this.id,
+      startTime: startTime ?? this.startTime,
+      endTime: endTime ?? this.endTime,
+    );
+  }
 }

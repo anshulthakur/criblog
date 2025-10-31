@@ -30,4 +30,20 @@ class FeedingEntry {
       source: FeedingSource.values.byName(map['source'] as String),
     );
   }
+
+  FeedingEntry insertWithId(int id) => FeedingEntry(
+    id: id,
+    startTime: startTime,
+    endTime: endTime,
+    source: source,
+  );
+
+  FeedingEntry copyWith({int? id, DateTime? startTime, DateTime? endTime, FeedingSource? source}) {
+    return FeedingEntry(
+      id: id ?? this.id,
+      startTime: startTime ?? this.startTime,
+      endTime: endTime ?? this.endTime,
+      source: source ?? this.source,
+    );
+  }
 }
