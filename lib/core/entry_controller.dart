@@ -1,4 +1,4 @@
-// lib/logic/entry_controller.dart
+// lib/core/entry_controller.dart
 import 'package:flutter/material.dart';
 import '../services/database.dart';
 import '../models/sleep_entry.dart';

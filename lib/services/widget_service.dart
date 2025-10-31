@@ -80,7 +80,8 @@ class WidgetService {
     await HomeWidget.saveWidgetData<String>('ongoing_feeding', feeding.toString());
     await HomeWidget.updateWidget(
       name: 'WidgetProvider',
-      androidName: 'WidgetProvider',
+      androidName: 'me.bhaad.criblog.WidgetProvider',
     );
+
   }
 }

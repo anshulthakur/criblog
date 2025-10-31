@@ -33,13 +33,15 @@ void main() async {
 
   // Init WorkManager
   Workmanager().initialize(callbackDispatcher);
-
-  // --- CORRECT: registerInteractivityCallback (non-deprecated) ---
-  await HomeWidget.registerInteractivityCallback((uri) async {
-    // This is called when the widget is tapped (if interactive)
-    // For now, just acknowledge
-    //return Future.value(true);
-  });
+  try {
+    await HomeWidget.registerInteractivityCallback((uri) async {
+      debugPrint('Widget tapped: $uri');
+      return;
+    });
+  } catch (e, stack) {
+    debugPrint('HomeWidget callback failed: $e');
+  }
+  
 
   // --- MethodChannel: receives actions from Kotlin WidgetWorker ---
   const platform = MethodChannel('me.bhaad.criblog/widget');
