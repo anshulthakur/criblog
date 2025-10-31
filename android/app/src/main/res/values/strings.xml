@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Baby Tracker</string>
+    <string name="widget_name">Baby Tracker Widget</string>
+    <string name="widget_description">Quick access to log baby sleep and feeding</string>
+</resources>
