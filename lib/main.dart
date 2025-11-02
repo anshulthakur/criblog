@@ -1,19 +1,30 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:workmanager/workmanager.dart';
-import 'package:home_widget/home_widget.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'services/database.dart';
+import 'services/sync_service.dart';
 import 'services/widget_service.dart';
 import 'screens/entries_screen.dart';
 import 'screens/settings_screen.dart';
 import 'screens/input_screen.dart';
 import 'widgets/app_drawer.dart';
 import 'widgets/entry_bar.dart';
+import 'package:home_widget/home_widget.dart';
 
 /// WorkManager dispatcher – runs in background
+@pragma('vm:entry-point')
 void callbackDispatcher() {
   Workmanager().executeTask((task, inputData) async {
     switch (task) {
+      case 'auto-sync':
+        final syncService = SyncService();
+        try {
+          await syncService.sync();
+        } catch (e) {
+          debugPrint('Auto-sync failed: $e');
+        }
+        break;
       case "widget-feeding-toggle":
         await WidgetService.handleFeedingFromWidget();
         break;
@@ -33,6 +44,24 @@ void main() async {
 
   // Init WorkManager
   Workmanager().initialize(callbackDispatcher);
+  
+  // Schedule auto-sync
+  final syncService = SyncService();
+  final prefs = await SharedPreferences.getInstance();
+  final authorized = await syncService.isAuthorized;
+  final interval = prefs.getInt('sync_auto_interval') ?? 180;
+  if (authorized && interval > 0) {
+    Workmanager().registerPeriodicTask(
+      'auto-sync-task',
+      'auto-sync',
+      frequency: Duration(minutes: interval),
+      constraints: Constraints(
+        networkType: NetworkType.connected,
+      ),
+    );
+  }
+  
+  /*
   try {
     await HomeWidget.registerInteractivityCallback((uri) async {
       debugPrint('Widget tapped: $uri');
@@ -41,9 +70,10 @@ void main() async {
   } catch (e, stack) {
     debugPrint('HomeWidget callback failed: $e');
   }
-  
+  */
 
   // --- MethodChannel: receives actions from Kotlin WidgetWorker ---
+  /*
   const platform = MethodChannel('me.bhaad.criblog/widget');
   platform.setMethodCallHandler((call) async {
     if (call.method == 'handleAction') {
@@ -55,9 +85,10 @@ void main() async {
       }
     }
   });
+  */
 
   // Sync app state → widget on launch
-  await WidgetService.syncAppToWidget();
+  //await WidgetService.syncAppToWidget();
 
   runApp(const CribLogApp());
 }
@@ -91,6 +122,7 @@ class _HomeScreenState extends State<HomeScreen> {
   final ScrollController _scroll = ScrollController();
   bool _showBar = true;
   double _prev = 0.0;
+  final SyncService _syncService = SyncService();
 
   @override
   void initState() {
@@ -112,10 +144,59 @@ class _HomeScreenState extends State<HomeScreen> {
     super.dispose();
   }
 
+  Future<void> _sync() async {
+    try {
+      await _syncService.sync(forcePull: true);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Synced successfully')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Sync failed: $e')),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Baby Tracker')),
+      appBar: AppBar(
+        title: const Text('CribLog'),
+        actions: [
+          FutureBuilder<SharedPreferences>(
+            future: SharedPreferences.getInstance(),
+            builder: (context, snapshot) {
+              if (!snapshot.hasData) return const SizedBox();
+              final prefs = snapshot.data!;
+              final authorized = prefs.getBool('sync_drive_authorized') ?? false;
+              final timestamp = prefs.getString('sync_last_timestamp');
+              
+              return Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.sync),
+                    onPressed: authorized ? _sync : null,
+                    tooltip: authorized ? 'Sync Now' : 'Authorize Drive in Settings',
+                  ),
+                  if (timestamp != null)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: Text(
+                        DateTime.parse(timestamp).toLocal().toString().substring(11, 16),
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                    ),
+                ],
+              );
+            },
+          ),
+        ],
+      ),
       drawer: const AppDrawer(),
       body: Stack(
         children: [
@@ -128,7 +209,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 child: Padding(
                   padding: EdgeInsets.all(32),
                   child: Text(
-                    'Welcome to Baby Tracker!\nDashboard coming soon.',
+                    'Welcome to CribLog!\nDashboard coming soon.',
                     textAlign: TextAlign.center,
                     style: TextStyle(fontSize: 18),
                   ),

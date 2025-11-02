@@ -1,3 +1,4 @@
+import 'dart:convert'; // Added for json.encode
 import 'package:flutter/material.dart'; // For TimeOfDay
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
@@ -24,13 +25,15 @@ class DatabaseService {
 
     return await openDatabase(
       path,
-      version: 3,
+      version: 2,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE sleep_entries (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             startTime TEXT NOT NULL,
-            endTime TEXT
+            endTime TEXT,
+            lastModified TEXT NOT NULL,
+            modifiedBy TEXT NOT NULL
           )
         ''');
         await db.execute('''
@@ -38,27 +41,110 @@ class DatabaseService {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             startTime TEXT NOT NULL,
             endTime TEXT,
-            source TEXT NOT NULL
+            source TEXT NOT NULL,
+            lastModified TEXT NOT NULL,
+            modifiedBy TEXT NOT NULL
+          )
+        ''');
+        await db.execute('''
+          CREATE TABLE pending_deltas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            type TEXT NOT NULL,
+            table_name TEXT NOT NULL,
+            entry_json TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            modified_by TEXT NOT NULL,
+            synced BOOLEAN NOT NULL DEFAULT 0
           )
         ''');
       },
-      // onUpgrade: (db, oldVersion, newVersion) async {
-      //   if (oldVersion < 2) {
-      //     await db.execute('ALTER TABLE feeding_entries ADD COLUMN endTime TEXT');
-      //   }
-      //   if (oldVersion < 3) {
-      //     await db.execute('ALTER TABLE feeding_entries ADD COLUMN source TEXT NOT NULL DEFAULT "breast"');
-      //     await db.rawUpdate('UPDATE feeding_entries SET source = "breast" WHERE source IS NULL');
-      //   }
-      // },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          await db.execute('ALTER TABLE sleep_entries ADD COLUMN lastModified TEXT NOT NULL DEFAULT (datetime("now"))');
+          await db.execute('ALTER TABLE sleep_entries ADD COLUMN modifiedBy TEXT NOT NULL DEFAULT "local"');
+          await db.execute('ALTER TABLE feeding_entries ADD COLUMN lastModified TEXT NOT NULL DEFAULT (datetime("now"))');
+          await db.execute('ALTER TABLE feeding_entries ADD COLUMN modifiedBy TEXT NOT NULL DEFAULT "local"');
+          await db.execute('''
+            CREATE TABLE pending_deltas (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              type TEXT NOT NULL,
+              table_name TEXT NOT NULL,
+              entry_json TEXT NOT NULL,
+              timestamp TEXT NOT NULL,
+              modified_by TEXT NOT NULL,
+              synced BOOLEAN NOT NULL DEFAULT 0
+            )
+          ''');
+          await db.rawUpdate('UPDATE sleep_entries SET lastModified = datetime("now"), modifiedBy = "local"');
+          await db.rawUpdate('UPDATE feeding_entries SET lastModified = datetime("now"), modifiedBy = "local"');
+        }
+      },
     );
+  }
+
+  // === Pending Deltas ===
+  Future<void> addPendingDelta({
+    required String type,
+    required String tableName,
+    required Map<String, dynamic> entryJson,
+    required String timestamp,
+    required String modifiedBy,
+  }) async {
+    final db = await database;
+    await db.insert(
+      'pending_deltas',
+      {
+        'type': type,
+        'table_name': tableName,
+        'entry_json': json.encode(entryJson),
+        'timestamp': timestamp,
+        'modified_by': modifiedBy,
+        'synced': 0,
+      },
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> getPendingDeltas() async {
+    final db = await database;
+    return await db.query('pending_deltas', where: 'synced = ?', whereArgs: [0]);
+  }
+
+  Future<void> markDeltasSynced(List<int> ids) async {
+    final db = await database;
+    await db.update(
+      'pending_deltas',
+      {'synced': 1},
+      where: 'id IN (${ids.join(',')})',
+    );
+  }
+
+  Future<int> clearSyncedDeltas() async {
+    final db = await database;
+    return await db.delete('pending_deltas', where: 'synced = 1');
   }
 
   // === Sleep CRUD ===
   Future<int> insertSleepEntry(SleepEntry entry) async {
     final db = await database;
-    final id = await db.insert('sleep_entries', entry.toMap());
+    final entryWithDefaults = entry.copyWith(
+      lastModified: entry.lastModified,
+      modifiedBy: entry.modifiedBy,
+    );
+    final id = await db.insert(
+      'sleep_entries',
+      entryWithDefaults.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
     debugPrint('Inserted sleep entry with id: $id');
+    
+    await addPendingDelta(
+      type: 'insert',
+      tableName: 'sleep_entries',
+      entryJson: entryWithDefaults.copyWith(id: id).toJson(),
+      timestamp: entryWithDefaults.lastModified.toIso8601String(),
+      modifiedBy: entryWithDefaults.modifiedBy,
+    );
+    
     return id;
   }
 
@@ -70,48 +156,77 @@ class DatabaseService {
 
   Future<SleepEntry?> getSleepEntryById(int id) async {
     final db = await database;
-    final maps = await db.query('sleep_entries', where: 'id = ?', whereArgs: [id]);
+    final maps = await db.query('sleep_entries', where: 'id = ?', whereArgs: [id]); // Fixed typo: removed scel_id
     if (maps.isNotEmpty) {
       return SleepEntry.fromMap(maps.first);
     }
     return null;
   }
 
-  
   Future<void> updateSleepEntry(SleepEntry entry) async {
     if (entry.id == null) {
       debugPrint('ERROR: Cannot update SleepEntry with null id');
       return;
     }
-
     final db = await database;
+    final entryWithDefaults = entry.copyWith(
+      lastModified: entry.lastModified,
+      modifiedBy: entry.modifiedBy,
+    );
     final count = await db.update(
       'sleep_entries',
-      entry.toMap(),
+      entryWithDefaults.toMap(),
       where: 'id = ?',
       whereArgs: [entry.id],
     );
-
     debugPrint('updateSleepEntry: updated $count rows');
+    
+    await addPendingDelta(
+      type: 'update',
+      tableName: 'sleep_entries',
+      entryJson: entryWithDefaults.toJson(),
+      timestamp: entryWithDefaults.lastModified.toIso8601String(),
+      modifiedBy: entryWithDefaults.modifiedBy,
+    );
   }
 
   Future<void> deleteSleepEntry(int id) async {
     final db = await database;
-    await db.delete(
-      'sleep_entries',
-      where: 'id = ?',
-      whereArgs: [id],
+    await db.delete('sleep_entries', where: 'id = ?', whereArgs: [id]);
+    
+    await addPendingDelta(
+      type: 'delete',
+      tableName: 'sleep_entries',
+      entryJson: {'id': id},
+      timestamp: DateTime.now().toIso8601String(),
+      modifiedBy: 'local',
     );
   }
 
   // === Feeding CRUD ===
   Future<int> insertFeedingEntry(FeedingEntry entry) async {
     final db = await database;
-    final id = await db.insert('feeding_entries', entry.toMap());
+    final entryWithDefaults = entry.copyWith(
+      lastModified: entry.lastModified,
+      modifiedBy: entry.modifiedBy,
+    );
+    final id = await db.insert(
+      'feeding_entries',
+      entryWithDefaults.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
     debugPrint('Inserted feeding entry with id: $id');
+    
+    await addPendingDelta(
+      type: 'insert',
+      tableName: 'feeding_entries',
+      entryJson: entryWithDefaults.copyWith(id: id).toJson(),
+      timestamp: entryWithDefaults.lastModified.toIso8601String(),
+      modifiedBy: entryWithDefaults.modifiedBy,
+    );
+    
     return id;
   }
-
 
   Future<List<FeedingEntry>> getFeedingEntries() async {
     final db = await database;
@@ -129,33 +244,46 @@ class DatabaseService {
   }
 
   Future<void> updateFeedingEntry(FeedingEntry entry) async {
-  if (entry.id == null) {
-    debugPrint('ERROR: Cannot update FeedingEntry with null id');
-    return;
-  }
-
-  final db = await database;
-  final count = await db.update(
-    'feeding_entries',
-    entry.toMap(),
-    where: 'id = ?',
-    whereArgs: [entry.id],
-  );
-
-  debugPrint('updateFeedingEntry: updated $count rows');
-}
-
-
-  Future<void> deleteFeedingEntry(int id) async {
+    if (entry.id == null) {
+      debugPrint('ERROR: Cannot update FeedingEntry with null id');
+      return;
+    }
     final db = await database;
-    await db.delete(
+    final entryWithDefaults = entry.copyWith(
+      lastModified: entry.lastModified,
+      modifiedBy: entry.modifiedBy,
+    );
+    final count = await db.update(
       'feeding_entries',
+      entryWithDefaults.toMap(),
       where: 'id = ?',
-      whereArgs: [id],
+      whereArgs: [entry.id],
+    );
+    debugPrint('updateFeedingEntry: updated $count rows');
+    
+    await addPendingDelta(
+      type: 'update',
+      tableName: 'feeding_entries',
+      entryJson: entryWithDefaults.toJson(),
+      timestamp: entryWithDefaults.lastModified.toIso8601String(),
+      modifiedBy: entryWithDefaults.modifiedBy,
     );
   }
 
-  // Helpers
+  Future<void> deleteFeedingEntry(int id) async {
+    final db = await database;
+    await db.delete('feeding_entries', where: 'id = ?', whereArgs: [id]);
+    
+    await addPendingDelta(
+      type: 'delete',
+      tableName: 'feeding_entries',
+      entryJson: {'id': id},
+      timestamp: DateTime.now().toIso8601String(),
+      modifiedBy: 'local',
+    );
+  }
+
+  // === Helpers ===
   Future<SleepEntry?> getOngoingSleep() async {
     final entries = await getSleepEntries();
     return entries.isNotEmpty && entries.first.endTime == null ? entries.first : null;
@@ -166,7 +294,7 @@ class DatabaseService {
     return entries.isNotEmpty && entries.first.endTime == null ? entries.first : null;
   }
 
-  // Combined Queries for Pagination
+  // === Combined Queries for Pagination ===
   Future<List<dynamic>> getCombinedEntries({
     DateTime? fromDate,
     DateTime? toDate,
@@ -200,7 +328,6 @@ class DatabaseService {
       args.add(formattedToTime);
     }
 
-
     String sleepQuery = '';
     String feedingQuery = '';
     if (showSleep) {
@@ -216,7 +343,7 @@ class DatabaseService {
     List<dynamic> unionArgs = [];
     if (showSleep && showFeeding) {
       unionQuery = '$sleepQuery UNION $feedingQuery';
-      unionArgs = [...args, ...args]; // Duplicate args for both parts
+      unionArgs = [...args, ...args];
     } else if (showSleep) {
       unionQuery = sleepQuery;
       unionArgs = args;

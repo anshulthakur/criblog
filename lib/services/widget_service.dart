@@ -76,12 +76,13 @@ class WidgetService {
     final sleep = prefs.getBool(_keyOngoingSleep) ?? false;
     final feeding = prefs.getBool(_keyOngoingFeeding) ?? false;
 
-    await HomeWidget.saveWidgetData<String>('ongoing_sleep', sleep.toString());
-    await HomeWidget.saveWidgetData<String>('ongoing_feeding', feeding.toString());
-    await HomeWidget.updateWidget(
-      name: 'WidgetProvider',
-      androidName: 'me.bhaad.criblog.WidgetProvider',
-    );
+    // await HomeWidget.saveWidgetData<String>('ongoing_sleep', sleep.toString());
+    // await HomeWidget.saveWidgetData<String>('ongoing_feeding', feeding.toString());
+
+    // await HomeWidget.updateWidget(
+    //   name: 'WidgetProvider',
+    //   androidName: 'me.bhaad.criblog.WidgetProvider',
+    // );
 
   }
 }
