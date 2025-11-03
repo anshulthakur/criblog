@@ -6,44 +6,69 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 class DriveService {
+
+  static final DriveService _instance = DriveService._internal();
+  factory DriveService() => _instance;
+  DriveService._internal();
+
+  
   static const String _scope = 'https://www.googleapis.com/auth/drive.file';
-  static const String _folderId = '1ztuF2eVMtO4acD3Y-omQves64qUEf9Pj'; // Your folder ID
+  static const String _folderId = '1ztuF2eVMtO4acD3Y-omQves64qUEf9Pj';
   static const String _deltaFileName = 'criblog_deltas.json';
-  static const String _clientId = '87427269367-nkr4k4gtdomr1k3jj9c82kgg53vukvj3.apps.googleusercontent.com'; // Your client ID
-  static const String _serverClientId = '87427269367-3tr6mlp9khafuc7qedf8gi20tuut2gda.apps.googleusercontent.com'; // Your server client ID
+  static const String _clientId = '87427269367-nkr4k4gtdomr1k3jj9c82kgg53vukvj3.apps.googleusercontent.com';
+  static const String _serverClientId = '87427269367-3tr6mlp9khafuc7qedf8gi20tuut2gda.apps.googleusercontent.com';
 
   GoogleSignInAccount? _currentUser;
   drive.DriveApi? _driveApi;
   GoogleSignIn? _googleSignIn;
+  bool _isInitialized = false;
+  Completer<GoogleSignInAccount?>? _signInCompleter;
+  bool _isSigningIn = false;
 
-  String get folderId => _folderId; // Getter for folderId
-
-  DriveService() {
-    _initializeGoogleSignIn();
-  }
+  String get folderId => _folderId;
 
   Future<void> _initializeGoogleSignIn() async {
+    if (_isInitialized) return;
     _googleSignIn = GoogleSignIn.instance;
     await _googleSignIn!.initialize(
       clientId: _clientId,
       serverClientId: _serverClientId,
     );
     _googleSignIn!.authenticationEvents.listen(_handleAuthenticationEvent, onError: _handleAuthenticationError);
-    await _googleSignIn!.attemptLightweightAuthentication();
+    _isInitialized = true;
+  }
+
+  Future<GoogleSignInAccount?> _ensureSignedIn() async {
+    await _initializeGoogleSignIn();
+    if (_currentUser != null) return _currentUser;
+
+    if (_signInCompleter != null) return _signInCompleter!.future;
+
+    _signInCompleter = Completer();
+    try {
+      print("Try Ensure signin");
+      final user = await _googleSignIn!.attemptLightweightAuthentication();
+      _currentUser = user;
+      _signInCompleter!.complete(user);
+      return user;
+    } catch (e) {
+      print("Ensure signin failed: $e");
+      _signInCompleter!.complete(null);
+      return null;
+    } finally {
+      _signInCompleter = null;
+    }
   }
 
   Future<void> _handleAuthenticationEvent(GoogleSignInAuthenticationEvent event) async {
     switch (event) {
       case GoogleSignInAuthenticationEventSignIn():
         _currentUser = event.user;
-        if (_currentUser != null) {
-          final headers = await _currentUser!.authorizationClient.authorizationHeaders([_scope]);
-          if (headers != null) {
-            _driveApi = drive.DriveApi(AuthClient(headers));
-            final prefs = await SharedPreferences.getInstance();
-            await prefs.setBool('sync_drive_authorized', true);
-          }
-        }
+        final headers = await _currentUser!.authorizationClient.authorizationHeaders([_scope]);
+        if (headers == null) throw Exception('Failed to get authorization headers');
+        _driveApi = drive.DriveApi(AuthClient(headers));
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setBool('sync_drive_authorized', true);
         break;
       case GoogleSignInAuthenticationEventSignOut():
         _currentUser = null;
@@ -59,128 +84,99 @@ class DriveService {
     _driveApi = null;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('sync_drive_authorized', false);
+    print("Error on auth: $e");
   }
 
   Future<bool> get isAuthorized async {
-    if (_googleSignIn == null) await _initializeGoogleSignIn();
-    final user = await _googleSignIn!.attemptLightweightAuthentication();
+    print("isAuthorized");
+    final user = await _ensureSignedIn();
     return user != null;
   }
 
   Future<String?> get currentUserEmail async {
-    if (_googleSignIn == null) await _initializeGoogleSignIn();
-    final user = await _googleSignIn!.attemptLightweightAuthentication();
+    print("currentUserEmail");
+    final user = await _ensureSignedIn();
     return user?.email;
   }
 
   Future<void> signIn() async {
-    if (_googleSignIn == null) await _initializeGoogleSignIn();
-    
+    if (_isSigningIn) return;
+    _isSigningIn = true;
+    await _initializeGoogleSignIn();
+
     try {
+      print("Try signin");
       _currentUser = await _googleSignIn!.attemptLightweightAuthentication() ?? await _googleSignIn!.authenticate();
-      if (_currentUser == null) {
-        throw Exception('Google Sign-In failed');
-      }
+      if (_currentUser == null) throw Exception('Google Sign-In failed');
 
       final headers = await _currentUser!.authorizationClient.authorizationHeaders([_scope]);
-      if (headers == null) {
-        throw Exception('Failed to get authorization headers');
-      }
-      _driveApi = drive.DriveApi(AuthClient(headers));
+      if (headers == null) throw Exception('Failed to get authorization headers');
 
+      _driveApi = drive.DriveApi(AuthClient(headers));
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('sync_drive_authorized', true);
     } catch (e) {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('sync_drive_authorized', false);
+      print("Sign-in failed: $e");
       rethrow;
+    } finally {
+      _isSigningIn = false;
     }
   }
 
   Future<void> signOut() async {
-    if (_googleSignIn == null) await _initializeGoogleSignIn();
+    await _initializeGoogleSignIn();
     await _googleSignIn!.disconnect();
     _currentUser = null;
     _driveApi = null;
-    
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('sync_drive_authorized', false);
   }
 
   Future<Map<String, dynamic>> pullDeltas() async {
-    if (!await isAuthorized) {
-      throw Exception('Not authorized');
+    if (!await isAuthorized) throw Exception('Not authorized');
+
+    final query = 'name = "$_deltaFileName" and "$_folderId" in parents and trashed = false';
+    final fileList = await _driveApi!.files.list(q: query);
+
+    if (fileList.files == null || fileList.files!.isEmpty) {
+      return {
+        'deltas': [],
+        'lastSyncTimestamp': DateTime(1970).toIso8601String(),
+        'version': '1.0.0',
+      };
     }
 
-    try {
-      final query = 'name = "$_deltaFileName" and "$_folderId" in parents and trashed = false';
-      final fileList = await _driveApi!.files.list(q: query);
+    final file = fileList.files!.first;
+    final media = await _driveApi!.files.get(file.id!, downloadOptions: drive.DownloadOptions.fullMedia) as drive.Media;
+    final bytes = await _collectBytes(media.stream);
+    final jsonString = utf8.decode(bytes);
 
-      if (fileList.files == null || fileList.files!.isEmpty) {
-        return {
-          'deltas': [],
-          'lastSyncTimestamp': DateTime(1970).toIso8601String(),
-          'version': '1.0.0',
-        };
-      }
-
-      final file = fileList.files!.first;
-      final media = await _driveApi!.files.get(file.id!, downloadOptions: drive.DownloadOptions.fullMedia) as drive.Media;
-      final bytes = await _collectBytes(media.stream);
-      final jsonString = utf8.decode(bytes);
-      
-      return json.decode(jsonString);
-    } catch (e) {
-      throw Exception('Failed to pull deltas: $e');
-    }
-  }
-
-  Future<List<int>> _collectBytes(Stream<List<int>> stream) async {
-    final List<int> bytes = [];
-    await for (final chunk in stream) {
-      bytes.addAll(chunk);
-    }
-    return bytes;
+    return json.decode(jsonString);
   }
 
   Future<void> pushDeltas(Map<String, dynamic> deltaData) async {
-    if (!await isAuthorized) {
-      throw Exception('Not authorized');
-    }
+    if (!await isAuthorized) throw Exception('Not authorized');
 
-    try {
-      final jsonString = json.encode(deltaData);
-      final media = drive.Media(Stream.value(jsonString.codeUnits), jsonString.length);
+    final jsonString = json.encode(deltaData);
+    final media = drive.Media(Stream.value(jsonString.codeUnits), jsonString.length);
 
-      final query = 'name = "$_deltaFileName" and "$_folderId" in parents and trashed = false';
-      final fileList = await _driveApi!.files.list(q: query);
+    final query = 'name = "$_deltaFileName" and "$_folderId" in parents and trashed = false';
+    final fileList = await _driveApi!.files.list(q: query);
 
-      drive.File file;
-      if (fileList.files == null || fileList.files!.isEmpty) {
-        file = drive.File()
-          ..name = _deltaFileName
-          ..parents = [_folderId];
-      } else {
-        file = drive.File()
-          ..id = fileList.files!.first.id
-          ..name = _deltaFileName
-          ..parents = [_folderId];
-      }
-
-      if (file.id != null) {
-        await _driveApi!.files.update(file, file.id!, uploadMedia: media);
-      } else {
-        await _driveApi!.files.create(file, uploadMedia: media);
-      }
-    } catch (e) {
-      throw Exception('Failed to push deltas: $e');
+    drive.File file;
+    if (fileList.files == null || fileList.files!.isEmpty) {
+      file = drive.File()..name = _deltaFileName..parents = [_folderId];
+      await _driveApi!.files.create(file, uploadMedia: media);
+    } else {
+      file = drive.File()..id = fileList.files!.first.id..name = _deltaFileName..parents = [_folderId];
+      await _driveApi!.files.update(file, file.id!, uploadMedia: media);
     }
   }
 
   Future<void> checkFolderAccess() async {
-    if (!await isAuthorized) {
-      throw Exception('Not authorized');
-    }
+    if (!await isAuthorized) throw Exception('Not authorized');
 
     try {
       final query = '"$_folderId" in parents and trashed = false';
@@ -193,6 +189,14 @@ class DriveService {
       await prefs.setBool('sync_drive_authorized', false);
       rethrow;
     }
+  }
+
+  Future<List<int>> _collectBytes(Stream<List<int>> stream) async {
+    final List<int> bytes = [];
+    await for (final chunk in stream) {
+      bytes.addAll(chunk);
+    }
+    return bytes;
   }
 }
 

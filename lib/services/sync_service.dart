@@ -6,7 +6,7 @@ import '../models/sleep_entry.dart';
 import '../models/feeding_entry.dart';
 
 class SyncService {
-  final DriveService _driveService = DriveService();
+  final DriveService _driveService = DriveService(); // now returns the singleton
   final DatabaseService _dbService = DatabaseService();
 
   Future<bool> get isAuthorized async => await _driveService.isAuthorized;

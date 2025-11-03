@@ -4,12 +4,12 @@ import 'package:workmanager/workmanager.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'services/database.dart';
 import 'services/sync_service.dart';
-import 'services/widget_service.dart';
+import 'screens/home_screen.dart';
 import 'screens/entries_screen.dart';
 import 'screens/settings_screen.dart';
 import 'screens/input_screen.dart';
 import 'widgets/app_drawer.dart';
-import 'widgets/entry_bar.dart';
+import 'services/widget_service.dart';
 import 'package:home_widget/home_widget.dart';
 
 /// WorkManager dispatcher – runs in background
@@ -161,124 +161,125 @@ class RootScaffold extends StatelessWidget {
   }
 }
 
-// ------------------------------------------------------------------- Home
-class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
-  @override
-  State<HomeScreen> createState() => _HomeScreenState();
-}
+// // ------------------------------------------------------------------- Home
 
-class _HomeScreenState extends State<HomeScreen> {
-  final ScrollController _scroll = ScrollController();
-  bool _showBar = true;
-  double _prev = 0.0;
-  final SyncService _syncService = SyncService();
+// class HomeScreen extends StatefulWidget {
+//   const HomeScreen({super.key});
+//   @override
+//   State<HomeScreen> createState() => _HomeScreenState();
+// }
 
-  @override
-  void initState() {
-    super.initState();
-    _scroll.addListener(() {
-      final cur = _scroll.offset;
-      if (cur > _prev && cur > 100) {
-        if (_showBar) setState(() => _showBar = false);
-      } else if (cur < _prev) {
-        if (!_showBar) setState(() => _showBar = true);
-      }
-      _prev = cur;
-    });
-  }
+// class _HomeScreenState extends State<HomeScreen> {
+//   final ScrollController _scroll = ScrollController();
+//   bool _showBar = true;
+//   double _prev = 0.0;
+//   final SyncService _syncService = SyncService();
 
-  @override
-  void dispose() {
-    _scroll.dispose();
-    super.dispose();
-  }
+//   @override
+//   void initState() {
+//     super.initState();
+//     _scroll.addListener(() {
+//       final cur = _scroll.offset;
+//       if (cur > _prev && cur > 100) {
+//         if (_showBar) setState(() => _showBar = false);
+//       } else if (cur < _prev) {
+//         if (!_showBar) setState(() => _showBar = true);
+//       }
+//       _prev = cur;
+//     });
+//   }
 
-  Future<void> _sync() async {
-    try {
-      await _syncService.sync(forcePull: true);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Synced successfully')),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Sync failed: $e')),
-        );
-      }
-    }
-  }
+//   @override
+//   void dispose() {
+//     _scroll.dispose();
+//     super.dispose();
+//   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('CribLog'),
-        actions: [
-          FutureBuilder<SharedPreferences>(
-            future: SharedPreferences.getInstance(),
-            builder: (context, snapshot) {
-              if (!snapshot.hasData) return const SizedBox();
-              final prefs = snapshot.data!;
-              final authorized = prefs.getBool('sync_drive_authorized') ?? false;
-              final timestamp = prefs.getString('sync_last_timestamp');
+//   Future<void> _sync() async {
+//     try {
+//       await _syncService.sync(forcePull: true);
+//       if (mounted) {
+//         ScaffoldMessenger.of(context).showSnackBar(
+//           const SnackBar(content: Text('Synced successfully')),
+//         );
+//       }
+//     } catch (e) {
+//       if (mounted) {
+//         ScaffoldMessenger.of(context).showSnackBar(
+//           SnackBar(content: Text('Sync failed: $e')),
+//         );
+//       }
+//     }
+//   }
+
+//   @override
+//   Widget build(BuildContext context) {
+//     return Scaffold(
+//       appBar: AppBar(
+//         title: const Text('CribLog'),
+//         actions: [
+//           FutureBuilder<SharedPreferences>(
+//             future: SharedPreferences.getInstance(),
+//             builder: (context, snapshot) {
+//               if (!snapshot.hasData) return const SizedBox();
+//               final prefs = snapshot.data!;
+//               final authorized = prefs.getBool('sync_drive_authorized') ?? false;
+//               final timestamp = prefs.getString('sync_last_timestamp');
               
-              return Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.sync),
-                    onPressed: authorized ? _sync : null,
-                    tooltip: authorized ? 'Sync Now' : 'Authorize Drive in Settings',
-                  ),
-                  if (timestamp != null)
-                    Padding(
-                      padding: const EdgeInsets.only(right: 8),
-                      child: Text(
-                        DateTime.parse(timestamp).toLocal().toString().substring(11, 16),
-                        style: const TextStyle(fontSize: 12),
-                      ),
-                    ),
-                ],
-              );
-            },
-          ),
-        ],
-      ),
-      drawer: const AppDrawer(),
-      body: Stack(
-        children: [
-          // ----- Dashboard area (will be filled later) -----
-          ListView(
-            controller: _scroll,
-            padding: const EdgeInsets.only(bottom: 80),
-            children: const [
-              Center(
-                child: Padding(
-                  padding: EdgeInsets.all(32),
-                  child: Text(
-                    'Welcome to CribLog!\nDashboard coming soon.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 18),
-                  ),
-                ),
-              ),
-              SizedBox(height: 1200), // scrollable filler
-            ],
-          ),
+//               return Row(
+//                 mainAxisSize: MainAxisSize.min,
+//                 children: [
+//                   IconButton(
+//                     icon: const Icon(Icons.sync),
+//                     onPressed: authorized ? _sync : null,
+//                     tooltip: authorized ? 'Sync Now' : 'Authorize Drive in Settings',
+//                   ),
+//                   if (timestamp != null)
+//                     Padding(
+//                       padding: const EdgeInsets.only(right: 8),
+//                       child: Text(
+//                         DateTime.parse(timestamp).toLocal().toString().substring(11, 16),
+//                         style: const TextStyle(fontSize: 12),
+//                       ),
+//                     ),
+//                 ],
+//               );
+//             },
+//           ),
+//         ],
+//       ),
+//       drawer: const AppDrawer(),
+//       body: Stack(
+//         children: [
+//           // ----- Dashboard area (will be filled later) -----
+//           ListView(
+//             controller: _scroll,
+//             padding: const EdgeInsets.only(bottom: 80),
+//             children: const [
+//               Center(
+//                 child: Padding(
+//                   padding: EdgeInsets.all(32),
+//                   child: Text(
+//                     'Welcome to CribLog!\nDashboard coming soon.',
+//                     textAlign: TextAlign.center,
+//                     style: TextStyle(fontSize: 18),
+//                   ),
+//                 ),
+//               ),
+//               SizedBox(height: 1200), // scrollable filler
+//             ],
+//           ),
 
-          // ----- Collapsible floating bar -----
-          AnimatedPositioned(
-            duration: const Duration(milliseconds: 250),
-            bottom: _showBar ? 0 : -80,
-            left: 0,
-            right: 0,
-            child: const EntryBar(),
-          ),
-        ],
-      ),
-    );
-  }
-}
+//           // ----- Collapsible floating bar -----
+//           AnimatedPositioned(
+//             duration: const Duration(milliseconds: 250),
+//             bottom: _showBar ? 0 : -80,
+//             left: 0,
+//             right: 0,
+//             child: const EntryBar(),
+//           ),
+//         ],
+//       ),
+//     );
+//   }
+// }

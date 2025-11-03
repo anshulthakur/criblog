@@ -14,7 +14,7 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   final SyncService _syncService = SyncService();
-  final DriveService _driveService = DriveService();
+  final DriveService _driveService = DriveService(); // now returns the singleton
   bool _driveAuthorized = false;
   int _autoSyncInterval = 180; // minutes (3 hours)
   final List<Map<String, dynamic>> _intervals = [
@@ -31,7 +31,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void initState() {
     super.initState();
-    _loadConfig();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadConfig());
   }
 
   Future<void> _loadConfig() async {
