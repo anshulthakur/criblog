@@ -101,16 +101,66 @@ class CribLogApp extends StatelessWidget {
     return MaterialApp(
       title: 'CribLog',
       theme: ThemeData(primarySwatch: Colors.blue, useMaterial3: true),
-      routes: {
-        '/': (_) => const HomeScreen(),
-        '/entries': (_) => const EntriesScreen(),
-        '/settings': (_) => const SettingsScreen(),
-        '/input': (_) => const InputScreen(),
-      },
+      debugShowCheckedModeBanner: false,
       initialRoute: '/',
+      routes: {
+        '/': (_) => const RootScaffold(child: HomeScreen()),
+        '/entries': (_) => const RootScaffold(child: EntriesScreen()),
+        '/settings': (_) => const RootScaffold(child: SettingsScreen()),
+        '/input': (_) => const RootScaffold(child: InputScreen()),
+      },
+      onGenerateRoute: (settings) {
+        // Fallback for invalid routes
+        return MaterialPageRoute(
+          builder: (_) => const RootScaffold(child: HomeScreen()),
+        );
+      },
     );
   }
 }
+
+class RootScaffold extends StatelessWidget {
+  final Widget child;
+  const RootScaffold({required this.child, super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return WillPopScope(
+      onWillPop: () async {
+        final routeName = ModalRoute.of(context)?.settings.name;
+        if (routeName != '/') {
+          // Info screens (Entries, Settings, Input) → go to Home
+          Navigator.pushReplacementNamed(context, '/');
+          return false;
+        }
+        // Home screen → exit app
+        SystemNavigator.pop();
+        return true;
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(_getTitle(context)),
+          centerTitle: true,
+        ),
+        drawer: const AppDrawer(),
+        drawerEnableOpenDragGesture: false, // Disable swipe to open drawer
+        body: SafeArea(child: child),
+      ),
+    );
+  }
+
+  String _getTitle(BuildContext context) {
+    final route = ModalRoute.of(context)?.settings.name;
+    return switch (route) {
+      '/' => 'Home',
+      '/entries' => 'Entries',
+      '/settings' => 'Settings',
+      '/input' => 'Log Activity',
+      _ => 'CribLog',
+    };
+  }
+}
+
 // ------------------------------------------------------------------- Home
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});

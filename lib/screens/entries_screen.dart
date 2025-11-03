@@ -375,7 +375,7 @@ class _EntriesScreenState extends State<EntriesScreen> {
                     }
                   },
                   child: Text('End: ${DateFormat('yyyy-MM-dd HH:mm').format(endTime!)}'),
-              ),
+                ),
               CheckboxListTile(
                 title: const Text('Ongoing'),
                 value: isOngoing,

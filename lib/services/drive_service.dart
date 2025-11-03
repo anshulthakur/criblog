@@ -6,11 +6,11 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 class DriveService {
-  static const String _scope = drive.DriveApi.driveFileScope;
-  static const String _folderId = '1ztuF2eVMtO4acD3Y-omQves64qUEf9Pj'; // Replace with actual ID
+  static const String _scope = 'https://www.googleapis.com/auth/drive.file';
+  static const String _folderId = '1ztuF2eVMtO4acD3Y-omQves64qUEf9Pj'; // Your folder ID
   static const String _deltaFileName = 'criblog_deltas.json';
-  static const String _clientId = '87427269367-nkr4k4gtdomr1k3jj9c82kgg53vukvj3.apps.googleusercontent.com'; // Replace with your Google Cloud OAuth client ID
-  static const String _serverClientId = '87427269367-3tr6mlp9khafuc7qedf8gi20tuut2gda.apps.googleusercontent.com';
+  static const String _clientId = '87427269367-nkr4k4gtdomr1k3jj9c82kgg53vukvj3.apps.googleusercontent.com'; // Your client ID
+  static const String _serverClientId = '87427269367-3tr6mlp9khafuc7qedf8gi20tuut2gda.apps.googleusercontent.com'; // Your server client ID
 
   GoogleSignInAccount? _currentUser;
   drive.DriveApi? _driveApi;
@@ -26,7 +26,7 @@ class DriveService {
     _googleSignIn = GoogleSignIn.instance;
     await _googleSignIn!.initialize(
       clientId: _clientId,
-      serverClientId: _serverClientId
+      serverClientId: _serverClientId,
     );
     _googleSignIn!.authenticationEvents.listen(_handleAuthenticationEvent, onError: _handleAuthenticationError);
     await _googleSignIn!.attemptLightweightAuthentication();

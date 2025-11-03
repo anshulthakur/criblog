@@ -1,6 +1,4 @@
-// lib/widgets/app_drawer.dart
 import 'package:flutter/material.dart';
-import '../screens/input_screen.dart';   // <-- NEW
 
 class AppDrawer extends StatelessWidget {
   const AppDrawer({super.key});
@@ -14,35 +12,41 @@ class AppDrawer extends StatelessWidget {
           const DrawerHeader(
             decoration: BoxDecoration(color: Colors.blue),
             child: Text(
-              'Baby Tracker',
+              'CribLog',
               style: TextStyle(color: Colors.white, fontSize: 24),
             ),
           ),
           ListTile(
             leading: const Icon(Icons.home),
             title: const Text('Home'),
-            onTap: () => Navigator.popAndPushNamed(context, '/'),
-          ),
-          ListTile(
-            leading: const Icon(Icons.add_circle),
-            title: const Text('Log Activity'),   // NEW MENU ITEM
             onTap: () {
-              Navigator.pop(context);
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const InputScreen()),
-              );
+              Navigator.pop(context); // Close drawer
+              Navigator.pushReplacementNamed(context, '/');
             },
           ),
           ListTile(
             leading: const Icon(Icons.list),
-            title: const Text('View Entries'),
-            onTap: () => Navigator.popAndPushNamed(context, '/entries'),
+            title: const Text('Entries'),
+            onTap: () {
+              Navigator.pop(context); // Close drawer
+              Navigator.pushReplacementNamed(context, '/entries');
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.add_circle),
+            title: const Text('Log Activity'),
+            onTap: () {
+              Navigator.pop(context); // Close drawer
+              Navigator.pushReplacementNamed(context, '/input');
+            },
           ),
           ListTile(
             leading: const Icon(Icons.settings),
             title: const Text('Settings'),
-            onTap: () => Navigator.popAndPushNamed(context, '/settings'),
+            onTap: () {
+              Navigator.pop(context); // Close drawer
+              Navigator.pushReplacementNamed(context, '/settings');
+            },
           ),
         ],
       ),
