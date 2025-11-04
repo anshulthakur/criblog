@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:workmanager/workmanager.dart';
 import 'drive_service.dart';
@@ -9,14 +10,18 @@ import '../models/feeding_entry.dart';
 class SyncService {
   final DriveService _driveService = DriveService();
   final DatabaseService _dbService = DatabaseService();
+  bool _isSyncing = false; // Prevent concurrent syncs
 
   Future<bool> get isAuthorized async => await _driveService.isAuthorized;
+  Future<String?> get currentUserEmail async => await _driveService.currentUserEmail;
 
   Future<void> sync({bool forcePull = false}) async {
+    if (_isSyncing) return; // Skip if already syncing
     if (!await isAuthorized) {
       throw Exception('Drive not authorized');
     }
 
+    _isSyncing = true;
     try {
       await _driveService.checkFolderAccess();
 
@@ -24,12 +29,10 @@ class SyncService {
       final lastSync = prefs.getString('sync_last_timestamp') ?? DateTime(1970).toIso8601String();
       final lastSyncTimestamp = DateTime.parse(lastSync);
 
-      print("Try to pull");
       if (forcePull || await _hasPendingPull(lastSyncTimestamp)) {
         await _pullAndMergeDeltas();
       }
 
-      print("Try to push");
       if (await _hasPendingPush()) {
         await _pushPendingDeltas();
       }
@@ -37,11 +40,12 @@ class SyncService {
       await prefs.setString('sync_last_timestamp', DateTime.now().toIso8601String());
       await prefs.setString('sync_last_result', 'success');
     } catch (e) {
-      print(e);
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('sync_last_timestamp', DateTime.now().toIso8601String());
       await prefs.setString('sync_last_result', 'failed: $e');
       rethrow;
+    } finally {
+      _isSyncing = false;
     }
   }
 
@@ -178,48 +182,66 @@ class SyncService {
     return prefs.getInt('sync_auto_interval') ?? 180;
   }
 
-  Future<void> logSleepInsert(SleepEntry entry) async {
-    final userEmail = await _driveService.currentUserEmail ?? 'local';
+  Future<void> _triggerBackgroundSync() async {
+    if (await isAuthorized && !_isSyncing) {
+      try {
+        await sync();
+      } catch (e) {
+        debugPrint('Background sync failed: $e');
+      }
+    }
+  }
+
+  Future<int> logSleepInsert(SleepEntry entry) async {
+    final userEmail = await currentUserEmail ?? 'local';
     final updatedEntry = entry.copyWith(
       lastModified: entry.lastModified ?? DateTime.now(),
       modifiedBy: userEmail,
     );
-    await _dbService.insertSleepEntry(updatedEntry);
+    final id = await _dbService.insertSleepEntry(updatedEntry);
+    await _triggerBackgroundSync();
+    return id;
   }
 
   Future<void> logSleepUpdate(SleepEntry entry) async {
-    final userEmail = await _driveService.currentUserEmail ?? 'local';
+    final userEmail = await currentUserEmail ?? 'local';
     final updatedEntry = entry.copyWith(
       lastModified: entry.lastModified ?? DateTime.now(),
       modifiedBy: userEmail,
     );
     await _dbService.updateSleepEntry(updatedEntry);
+    await _triggerBackgroundSync();
   }
 
   Future<void> logSleepDelete(int id) async {
     await _dbService.deleteSleepEntry(id);
+    await _triggerBackgroundSync();
   }
 
-  Future<void> logFeedingInsert(FeedingEntry entry) async {
-    final userEmail = await _driveService.currentUserEmail ?? 'local';
+  Future<int> logFeedingInsert(FeedingEntry entry) async {
+    final userEmail = await currentUserEmail ?? 'local';
     final updatedEntry = entry.copyWith(
       lastModified: entry.lastModified ?? DateTime.now(),
       modifiedBy: userEmail,
     );
-    await _dbService.insertFeedingEntry(updatedEntry);
+    final id = await _dbService.insertFeedingEntry(updatedEntry);
+    await _triggerBackgroundSync();
+    return id;
   }
 
   Future<void> logFeedingUpdate(FeedingEntry entry) async {
-    final userEmail = await _driveService.currentUserEmail ?? 'local';
+    final userEmail = await currentUserEmail ?? 'local';
     final updatedEntry = entry.copyWith(
       lastModified: entry.lastModified ?? DateTime.now(),
       modifiedBy: userEmail,
     );
     await _dbService.updateFeedingEntry(updatedEntry);
+    await _triggerBackgroundSync();
   }
 
   Future<void> logFeedingDelete(int id) async {
     await _dbService.deleteFeedingEntry(id);
+    await _triggerBackgroundSync();
   }
 }
 

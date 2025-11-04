@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../services/database.dart';
+import '../services/sync_service.dart';
 import '../models/sleep_entry.dart';
 import '../models/feeding_entry.dart';
 
@@ -24,6 +25,7 @@ class _EntriesScreenState extends State<EntriesScreen> {
   int _totalCount = 0;
 
   final DatabaseService _dbService = DatabaseService();
+  final SyncService _syncService = SyncService();
 
   @override
   void initState() {
@@ -192,7 +194,7 @@ class _EntriesScreenState extends State<EntriesScreen> {
     } else if (entry is FeedingEntry) {
       await _showEditFeedingDialog(entry);
     }
-    _loadEntries(); // Refresh after edit
+    _loadEntries();
   }
 
   Future<void> _showEditSleepDialog(SleepEntry entry) async {
@@ -292,8 +294,10 @@ class _EntriesScreenState extends State<EntriesScreen> {
                   id: entry.id,
                   startTime: startTime,
                   endTime: isOngoing ? null : endTime,
+                  lastModified: DateTime.now(),
+                  modifiedBy: 'local', // Will be updated by SyncService
                 );
-                _dbService.updateSleepEntry(updated);
+                _syncService.logSleepUpdate(updated);
                 Navigator.pop(context);
               },
               child: const Text('Save'),
@@ -414,8 +418,10 @@ class _EntriesScreenState extends State<EntriesScreen> {
                   startTime: startTime,
                   endTime: isOngoing ? null : endTime,
                   source: source,
+                  lastModified: DateTime.now(),
+                  modifiedBy: 'local', // Will be updated by SyncService
                 );
-                _dbService.updateFeedingEntry(updated);
+                _syncService.logFeedingUpdate(updated);
                 Navigator.pop(context);
               },
               child: const Text('Save'),
@@ -447,9 +453,9 @@ class _EntriesScreenState extends State<EntriesScreen> {
 
     if (confirm == true) {
       if (entry is SleepEntry) {
-        await _dbService.deleteSleepEntry(entry.id!);
+        await _syncService.logSleepDelete(entry.id!);
       } else if (entry is FeedingEntry) {
-        await _dbService.deleteFeedingEntry(entry.id!);
+        await _syncService.logFeedingDelete(entry.id!);
       }
       _loadEntries();
     }

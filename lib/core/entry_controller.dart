@@ -1,10 +1,10 @@
-// lib/core/entry_controller.dart
 import 'package:flutter/material.dart';
 import '../services/database.dart';
+import '../services/sync_service.dart';
 import '../models/sleep_entry.dart';
 import '../models/feeding_entry.dart';
 
-/// Mix-in that can be added to any State\<T\> where T extends StatefulWidget.
+/// Mix-in that can be added to any State<T> where T extends StatefulWidget.
 /// It contains **all** the logic for starting / ending sleep & feeding.
 mixin EntryController<T extends StatefulWidget> on State<T> {
   // ------------------------------------------------------------------ state
@@ -13,6 +13,8 @@ mixin EntryController<T extends StatefulWidget> on State<T> {
   SleepEntry? _lastSleep;
   FeedingEntry? _lastFeeding;
   FeedingSource _selectedSource = FeedingSource.breast;
+  final _syncService = SyncService();
+  final _dbService = DatabaseService();
 
   // ------------------------------------------------------------------ getters
   bool get isSleepOngoing => _isSleepOngoing;
@@ -29,8 +31,8 @@ mixin EntryController<T extends StatefulWidget> on State<T> {
   Future<void> refreshEntryState() async => _refreshStatus();
 
   Future<void> _refreshStatus() async {
-    final ongoingSleep = await DatabaseService().getOngoingSleep();
-    final ongoingFeeding = await DatabaseService().getOngoingFeeding();
+    final ongoingSleep = await _dbService.getOngoingSleep();
+    final ongoingFeeding = await _dbService.getOngoingFeeding();
 
     setState(() {
       _isSleepOngoing = ongoingSleep != null;
@@ -50,13 +52,19 @@ mixin EntryController<T extends StatefulWidget> on State<T> {
         id: _lastSleep!.id,
         startTime: _lastSleep!.startTime,
         endTime: now,
+        lastModified: now,
+        modifiedBy: await _syncService.currentUserEmail ?? 'local',
       );
-      await DatabaseService().updateSleepEntry(updated);
+      await _syncService.logSleepUpdate(updated);
       _snack('Sleep ended at ${_fmt(now)}');
       setState(() => _isSleepOngoing = false);
     } else {
-      final newEntry = SleepEntry(startTime: now);
-      final insertedId = await DatabaseService().insertSleepEntry(newEntry);
+      final newEntry = SleepEntry(
+        startTime: now,
+        lastModified: now,
+        modifiedBy: await _syncService.currentUserEmail ?? 'local',
+      );
+      final insertedId = await _syncService.logSleepInsert(newEntry);
       final entryWithId = newEntry.copyWith(id: insertedId);
       _snack('Sleep started at ${_fmt(now)}');
       setState(() {
@@ -64,37 +72,39 @@ mixin EntryController<T extends StatefulWidget> on State<T> {
         _lastSleep = entryWithId;
       });
     }
+    await _refreshStatus();
   }
 
   // ------------------------------------------------------------------ feeding
   Future<void> toggleFeeding() async {
     final now = DateTime.now();
     if (_isFeedingOngoing) {
-      // END: preserve id
       final updated = FeedingEntry(
         id: _lastFeeding!.id,
         startTime: _lastFeeding!.startTime,
         endTime: now,
         source: _lastFeeding!.source,
+        lastModified: now,
+        modifiedBy: await _syncService.currentUserEmail ?? 'local',
       );
-      await DatabaseService().updateFeedingEntry(updated);
+      await _syncService.logFeedingUpdate(updated);
       _snack('Feeding ended at ${_fmt(now)}');
     } else {
-      // START: insert + get id
       final newEntry = FeedingEntry(
         startTime: now,
         endTime: null,
         source: _selectedSource,
+        lastModified: now,
+        modifiedBy: await _syncService.currentUserEmail ?? 'local',
       );
-      final insertedId = await DatabaseService().insertFeedingEntry(newEntry);
-      final entryWithId = newEntry.copyWith(id: insertedId); // use copyWith
+      final insertedId = await _syncService.logFeedingInsert(newEntry);
+      final entryWithId = newEntry.copyWith(id: insertedId);
       _snack('Feeding (${_srcLabel(_selectedSource)}) started at ${_fmt(now)}');
       setState(() {
         _isFeedingOngoing = true;
         _lastFeeding = entryWithId;
       });
     }
-    // Optional: refresh from DB to be 100% safe
     await _refreshStatus();
   }
 
