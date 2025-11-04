@@ -3,20 +3,26 @@ import 'dart:convert';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:googleapis/drive/v3.dart' as drive;
 import 'package:http/http.dart' as http;
+import 'package:googleapis_auth/googleapis_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class DriveService {
 
+  // Singleton class
   static final DriveService _instance = DriveService._internal();
-  factory DriveService() => _instance;
   DriveService._internal();
+  factory DriveService() => _instance;
 
-  
-  static const String _scope = 'https://www.googleapis.com/auth/drive.file';
+  bool get isSigningIn => _isSigningIn;
+
+  static const List<String> scopes = <String>[
+    'https://www.googleapis.com/auth/drive',
+  ];
+
   static const String _folderId = '1ztuF2eVMtO4acD3Y-omQves64qUEf9Pj';
+  // https://drive.google.com/drive/folders/1ztuF2eVMtO4acD3Y-omQves64qUEf9Pj?usp=drive_link
   static const String _deltaFileName = 'criblog_deltas.json';
-  static const String _clientId = '87427269367-nkr4k4gtdomr1k3jj9c82kgg53vukvj3.apps.googleusercontent.com';
-  static const String _serverClientId = '87427269367-3tr6mlp9khafuc7qedf8gi20tuut2gda.apps.googleusercontent.com';
+  static const String _serverClientId = '968467901875-5mtlucgu2er4ol2dt9l0g93o4j7oc7nj.apps.googleusercontent.com';
 
   GoogleSignInAccount? _currentUser;
   drive.DriveApi? _driveApi;
@@ -28,10 +34,12 @@ class DriveService {
   String get folderId => _folderId;
 
   Future<void> _initializeGoogleSignIn() async {
-    if (_isInitialized) return;
+    if (_isInitialized) {
+      return;
+    }
     _googleSignIn = GoogleSignIn.instance;
     await _googleSignIn!.initialize(
-      clientId: _clientId,
+      clientId: null,
       serverClientId: _serverClientId,
     );
     _googleSignIn!.authenticationEvents.listen(_handleAuthenticationEvent, onError: _handleAuthenticationError);
@@ -40,13 +48,14 @@ class DriveService {
 
   Future<GoogleSignInAccount?> _ensureSignedIn() async {
     await _initializeGoogleSignIn();
-    if (_currentUser != null) return _currentUser;
+    if (_currentUser != null) {
+      return _currentUser;
+    }
 
     if (_signInCompleter != null) return _signInCompleter!.future;
 
     _signInCompleter = Completer();
     try {
-      print("Try Ensure signin");
       final user = await _googleSignIn!.attemptLightweightAuthentication();
       _currentUser = user;
       _signInCompleter!.complete(user);
@@ -64,7 +73,7 @@ class DriveService {
     switch (event) {
       case GoogleSignInAuthenticationEventSignIn():
         _currentUser = event.user;
-        final headers = await _currentUser!.authorizationClient.authorizationHeaders([_scope]);
+        final headers = await _currentUser!.authorizationClient.authorizationHeaders(scopes);
         if (headers == null) throw Exception('Failed to get authorization headers');
         _driveApi = drive.DriveApi(AuthClient(headers));
         final prefs = await SharedPreferences.getInstance();
@@ -88,13 +97,11 @@ class DriveService {
   }
 
   Future<bool> get isAuthorized async {
-    print("isAuthorized");
     final user = await _ensureSignedIn();
     return user != null;
   }
 
   Future<String?> get currentUserEmail async {
-    print("currentUserEmail");
     final user = await _ensureSignedIn();
     return user?.email;
   }
@@ -105,16 +112,55 @@ class DriveService {
     await _initializeGoogleSignIn();
 
     try {
-      print("Try signin");
-      _currentUser = await _googleSignIn!.attemptLightweightAuthentication() ?? await _googleSignIn!.authenticate();
+      _currentUser = await _googleSignIn!.attemptLightweightAuthentication();
+
+      if (_currentUser == null) {
+        if (_googleSignIn!.supportsAuthenticate()) {
+          await Future.delayed(const Duration(milliseconds: 300));
+          //await WidgetsBinding.instance.endOfFrame;
+          _currentUser = await _googleSignIn!.authenticate();
+        } else {
+          throw Exception('Google Sign-In is not supported on this platform.');
+        }
+      }
+
       if (_currentUser == null) throw Exception('Google Sign-In failed');
 
-      final headers = await _currentUser!.authorizationClient.authorizationHeaders([_scope]);
-      if (headers == null) throw Exception('Failed to get authorization headers');
+      var authorization = await _currentUser!.authorizationClient.authorizationForScopes(scopes);
+      if (authorization == null) {
+        authorization = await _currentUser!.authorizationClient.authorizeScopes(scopes);
+      }
 
-      _driveApi = drive.DriveApi(AuthClient(headers));
+      final headers = await _currentUser!.authorizationClient.authorizationHeaders(scopes);
+      if (headers == null || !headers.containsKey('Authorization')) {
+        throw Exception('No access token available');
+      }
+
+      final authedClient = authenticatedClient(
+        http.Client(),
+        AccessCredentials(
+          AccessToken(
+            'Bearer',
+            headers['Authorization']!.split(' ').last,
+            DateTime.now().toUtc().add(const Duration(hours: 1)),
+          ),
+          null,
+          scopes,
+        ),
+      );
+
+      _driveApi = drive.DriveApi(authedClient);
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('sync_drive_authorized', true);
+    } on GoogleSignInException catch (e) {
+      if (e.code == GoogleSignInExceptionCode.canceled) {
+        print("Sign-in canceled by user or system: $e");
+      } else {
+        print("Google Sign-In configuration error: $e");
+      }
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('sync_drive_authorized', false);
+      rethrow;
     } catch (e) {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('sync_drive_authorized', false);
@@ -124,6 +170,8 @@ class DriveService {
       _isSigningIn = false;
     }
   }
+
+
 
   Future<void> signOut() async {
     await _initializeGoogleSignIn();
@@ -170,8 +218,12 @@ class DriveService {
       file = drive.File()..name = _deltaFileName..parents = [_folderId];
       await _driveApi!.files.create(file, uploadMedia: media);
     } else {
-      file = drive.File()..id = fileList.files!.first.id..name = _deltaFileName..parents = [_folderId];
-      await _driveApi!.files.update(file, file.id!, uploadMedia: media);
+      final fileId = fileList.files!.first.id!;
+      await _driveApi!.files.update(
+        drive.File(), // ✅ no metadata fields
+        fileId,
+        uploadMedia: media,
+      );
     }
   }
 
@@ -179,17 +231,20 @@ class DriveService {
     if (!await isAuthorized) throw Exception('Not authorized');
 
     try {
-      final query = '"$_folderId" in parents and trashed = false';
-      final fileList = await _driveApi!.files.list(q: query, $fields: 'files(id)');
-      if (fileList.files == null || fileList.files!.isEmpty) {
-        throw Exception('Cannot access shared folder. Please check permissions.');
+      final folder = await _driveApi!.files.get(_folderId, $fields: 'id, name, mimeType') as drive.File;
+
+      if (folder.mimeType != 'application/vnd.google-apps.folder') {
+        throw Exception('Target is not a folder');
       }
+      
     } catch (e) {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('sync_drive_authorized', false);
+      print("Drive folder access error: $e");
       rethrow;
     }
   }
+
 
   Future<List<int>> _collectBytes(Stream<List<int>> stream) async {
     final List<int> bytes = [];

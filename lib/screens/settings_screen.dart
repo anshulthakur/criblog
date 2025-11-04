@@ -3,7 +3,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:workmanager/workmanager.dart';
 import '../services/drive_service.dart';
 import '../services/sync_service.dart';
-import '../widgets/app_drawer.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -14,9 +13,11 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   final SyncService _syncService = SyncService();
-  final DriveService _driveService = DriveService(); // now returns the singleton
+  final DriveService _driveService = DriveService();
   bool _driveAuthorized = false;
   int _autoSyncInterval = 180; // minutes (3 hours)
+  bool _isSigningIn = false;
+
   final List<Map<String, dynamic>> _intervals = [
     {'label': '15 minutes', 'minutes': 15},
     {'label': '30 minutes', 'minutes': 30},
@@ -46,10 +47,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _toggleDriveAuth() async {
+    setState(() => _isSigningIn = true);
     final prefs = await SharedPreferences.getInstance();
     try {
       if (_driveAuthorized) {
         await _driveService.signOut();
+        await _syncService.cancelSync();
+        await prefs.setBool('sync_drive_authorized', false);
         setState(() => _driveAuthorized = false);
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -57,8 +61,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
           );
         }
       } else {
+        await Future.delayed(const Duration(milliseconds: 300));
         await _driveService.signIn();
         await _driveService.checkFolderAccess();
+        await prefs.setBool('sync_drive_authorized', true);
         setState(() => _driveAuthorized = true);
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -76,6 +82,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         );
       }
     }
+    setState(() => _isSigningIn = false);
   }
 
   Future<void> _updateAutoSync() async {
@@ -84,107 +91,97 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await prefs.setInt('sync_auto_interval', minutes);
     setState(() => _autoSyncInterval = minutes);
 
-    Workmanager().cancelAll();
     if (_driveAuthorized && minutes > 0) {
-      Workmanager().registerPeriodicTask(
-        'auto-sync-task',
-        'auto-sync',
-        frequency: Duration(minutes: minutes),
-        constraints: Constraints(
-          networkType: NetworkType.connected,
-        ),
-      );
+      await _syncService.scheduleSync(minutes);
+    } else {
+      await _syncService.cancelSync();
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Settings')),
-      drawer: const AppDrawer(),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          Card(
-            child: SwitchListTile(
-              title: const Text('Google Drive Sync'),
-              subtitle: const Text('Backup and sync across devices'),
-              value: _driveAuthorized,
-              onChanged: (_) => _toggleDriveAuth(),
-              secondary: _driveAuthorized
-                  ? const Icon(Icons.cloud_done, color: Colors.green)
-                  : const Icon(Icons.cloud_off, color: Colors.grey),
-            ),
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        Card(
+          child: SwitchListTile(
+            title: const Text('Google Drive Sync'),
+            subtitle: const Text('Backup and sync across devices'),
+            value: _driveAuthorized,
+            onChanged: _isSigningIn ? null : (_) => _toggleDriveAuth(),
+            secondary: _driveAuthorized
+                ? const Icon(Icons.cloud_done, color: Colors.green)
+                : const Icon(Icons.cloud_off, color: Colors.grey),
           ),
-          if (_driveAuthorized)
-            ListTile(
-              title: const Text('Shared Folder'),
-              subtitle: Text('Folder ID: ${_driveService.folderId.substring(0, 20)}...'),
-              trailing: const Icon(Icons.folder),
-              onTap: () {
-                // TODO: Copy folder ID to clipboard
-              },
-            ),
-          const Divider(),
-          Card(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                ListTile(
-                  title: const Text('Auto-Sync Interval'),
-                  subtitle: const Text('Sync in background'),
-                  trailing: DropdownButton<int>(
-                    value: _selectedInterval,
-                    items: _intervals.asMap().entries.map((entry) {
-                      return DropdownMenuItem(
-                        value: entry.key,
-                        child: Text(entry.value['label']),
-                      );
-                    }).toList(),
-                    onChanged: _driveAuthorized
-                        ? (value) {
-                            setState(() => _selectedInterval = value!);
-                            _updateAutoSync();
-                          }
-                        : null,
-                  ),
-                ),
-                if (_driveAuthorized)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Text(
-                      'Next sync: ${_intervals[_selectedInterval]['label']}',
-                      style: TextStyle(color: Colors.grey[600], fontSize: 12),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-          const Divider(),
-          FutureBuilder<SharedPreferences>(
-            future: SharedPreferences.getInstance(),
-            builder: (context, snapshot) {
-              if (!snapshot.hasData) return const SizedBox();
-              final prefs = snapshot.data!;
-              final timestamp = prefs.getString('sync_last_timestamp');
-              final result = prefs.getString('sync_last_result');
-              return Card(
-                child: ListTile(
-                  title: const Text('Last Sync'),
-                  subtitle: Text(
-                    timestamp != null
-                        ? 'At ${DateTime.parse(timestamp).toLocal().toString().substring(0, 16)}'
-                        : 'Never',
-                  ),
-                  trailing: timestamp != null && result == 'success'
-                      ? const Icon(Icons.check_circle, color: Colors.green)
-                      : const Icon(Icons.error, color: Colors.red),
-                ),
-              );
+        ),
+        if (_driveAuthorized)
+          ListTile(
+            title: const Text('Shared Folder'),
+            subtitle: Text('Folder ID: ${_driveService.folderId.substring(0, 20)}...'),
+            trailing: const Icon(Icons.folder),
+            onTap: () {
+              // TODO: Copy folder ID to clipboard
             },
           ),
-        ],
-      ),
+        const Divider(),
+        Card(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              ListTile(
+                title: const Text('Auto-Sync Interval'),
+                subtitle: const Text('Sync in background'),
+                trailing: DropdownButton<int>(
+                  value: _selectedInterval,
+                  items: _intervals.asMap().entries.map((entry) {
+                    return DropdownMenuItem(
+                      value: entry.key,
+                      child: Text(entry.value['label']),
+                    );
+                  }).toList(),
+                  onChanged: _driveAuthorized
+                      ? (value) {
+                          setState(() => _selectedInterval = value!);
+                          _updateAutoSync();
+                        }
+                      : null,
+                ),
+              ),
+              if (_driveAuthorized)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Text(
+                    'Next sync: ${_intervals[_selectedInterval]['label']}',
+                    style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        const Divider(),
+        FutureBuilder<SharedPreferences>(
+          future: SharedPreferences.getInstance(),
+          builder: (context, snapshot) {
+            if (!snapshot.hasData) return const SizedBox();
+            final prefs = snapshot.data!;
+            final timestamp = prefs.getString('sync_last_timestamp');
+            final result = prefs.getString('sync_last_result');
+            return Card(
+              child: ListTile(
+                title: const Text('Last Sync'),
+                subtitle: Text(
+                  timestamp != null
+                      ? 'At ${DateTime.parse(timestamp).toLocal().toString().substring(0, 16)}'
+                      : 'Never',
+                ),
+                trailing: timestamp != null && result == 'success'
+                    ? const Icon(Icons.check_circle, color: Colors.green)
+                    : const Icon(Icons.error, color: Colors.red),
+              ),
+            );
+          },
+        ),
+      ],
     );
   }
 }

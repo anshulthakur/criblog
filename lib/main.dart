@@ -119,32 +119,107 @@ class CribLogApp extends StatelessWidget {
   }
 }
 
-class RootScaffold extends StatelessWidget {
+class RootScaffold extends StatefulWidget {
   final Widget child;
   const RootScaffold({required this.child, super.key});
+
+  @override
+  State<RootScaffold> createState() => _RootScaffoldState();
+}
+
+class _RootScaffoldState extends State<RootScaffold> {
+  final syncService = SyncService();
+  final List<String> _routeHistory = ['/'];
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final currentRoute = ModalRoute.of(context)?.settings.name;
+    if (currentRoute != null && currentRoute != _routeHistory.last) {
+      _routeHistory.add(currentRoute);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return WillPopScope(
       onWillPop: () async {
         final routeName = ModalRoute.of(context)?.settings.name;
-        if (routeName != '/') {
-          // Info screens (Entries, Settings, Input) → go to Home
+        if (routeName == '/') {
+          // Home screen → exit app
+          SystemNavigator.pop();
+          return true;
+        } else if (routeName == '/settings') {
+          // Settings → pop to previous screen
+          if (_routeHistory.length > 1) {
+            _routeHistory.removeLast();
+            Navigator.pop(context);
+            return false;
+          }
+        } else {
+          // Entries, Input → go to Home
+          _routeHistory.clear();
+          _routeHistory.add('/');
           Navigator.pushReplacementNamed(context, '/');
           return false;
         }
-        // Home screen → exit app
-        SystemNavigator.pop();
         return true;
       },
       child: Scaffold(
         appBar: AppBar(
           title: Text(_getTitle(context)),
           centerTitle: true,
+          actions: [
+            FutureBuilder<SharedPreferences>(
+              future: SharedPreferences.getInstance(),
+              builder: (context, snapshot) {
+                if (!snapshot.hasData) return const SizedBox();
+                final prefs = snapshot.data!;
+                final authorized = prefs.getBool('sync_drive_authorized') ?? false;
+                final timestamp = prefs.getString('sync_last_timestamp');
+
+                return Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.sync),
+                      onPressed: authorized
+                          ? () async {
+                              try {
+                                await syncService.sync(forcePull: true);
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(content: Text('Synced successfully')),
+                                  );
+                                }
+                              } catch (e) {
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text('Sync failed: $e')),
+                                  );
+                                }
+                              }
+                            }
+                          : null,
+                      tooltip: authorized ? 'Sync Now' : 'Authorize Drive in Settings',
+                    ),
+                    if (timestamp != null)
+                      Padding(
+                        padding: const EdgeInsets.only(right: 8),
+                        child: Text(
+                          DateTime.parse(timestamp).toLocal().toString().substring(11, 16),
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                      ),
+                  ],
+                );
+              },
+            ),
+          ],
         ),
         drawer: const AppDrawer(),
-        drawerEnableOpenDragGesture: false, // Disable swipe to open drawer
-        body: SafeArea(child: child),
+        drawerEnableOpenDragGesture: false,
+        body: SafeArea(child: widget.child),
       ),
     );
   }
@@ -152,7 +227,7 @@ class RootScaffold extends StatelessWidget {
   String _getTitle(BuildContext context) {
     final route = ModalRoute.of(context)?.settings.name;
     return switch (route) {
-      '/' => 'Home',
+      '/' => 'CribLog',
       '/entries' => 'Entries',
       '/settings' => 'Settings',
       '/input' => 'Log Activity',
@@ -160,126 +235,3 @@ class RootScaffold extends StatelessWidget {
     };
   }
 }
-
-// // ------------------------------------------------------------------- Home
-
-// class HomeScreen extends StatefulWidget {
-//   const HomeScreen({super.key});
-//   @override
-//   State<HomeScreen> createState() => _HomeScreenState();
-// }
-
-// class _HomeScreenState extends State<HomeScreen> {
-//   final ScrollController _scroll = ScrollController();
-//   bool _showBar = true;
-//   double _prev = 0.0;
-//   final SyncService _syncService = SyncService();
-
-//   @override
-//   void initState() {
-//     super.initState();
-//     _scroll.addListener(() {
-//       final cur = _scroll.offset;
-//       if (cur > _prev && cur > 100) {
-//         if (_showBar) setState(() => _showBar = false);
-//       } else if (cur < _prev) {
-//         if (!_showBar) setState(() => _showBar = true);
-//       }
-//       _prev = cur;
-//     });
-//   }
-
-//   @override
-//   void dispose() {
-//     _scroll.dispose();
-//     super.dispose();
-//   }
-
-//   Future<void> _sync() async {
-//     try {
-//       await _syncService.sync(forcePull: true);
-//       if (mounted) {
-//         ScaffoldMessenger.of(context).showSnackBar(
-//           const SnackBar(content: Text('Synced successfully')),
-//         );
-//       }
-//     } catch (e) {
-//       if (mounted) {
-//         ScaffoldMessenger.of(context).showSnackBar(
-//           SnackBar(content: Text('Sync failed: $e')),
-//         );
-//       }
-//     }
-//   }
-
-//   @override
-//   Widget build(BuildContext context) {
-//     return Scaffold(
-//       appBar: AppBar(
-//         title: const Text('CribLog'),
-//         actions: [
-//           FutureBuilder<SharedPreferences>(
-//             future: SharedPreferences.getInstance(),
-//             builder: (context, snapshot) {
-//               if (!snapshot.hasData) return const SizedBox();
-//               final prefs = snapshot.data!;
-//               final authorized = prefs.getBool('sync_drive_authorized') ?? false;
-//               final timestamp = prefs.getString('sync_last_timestamp');
-              
-//               return Row(
-//                 mainAxisSize: MainAxisSize.min,
-//                 children: [
-//                   IconButton(
-//                     icon: const Icon(Icons.sync),
-//                     onPressed: authorized ? _sync : null,
-//                     tooltip: authorized ? 'Sync Now' : 'Authorize Drive in Settings',
-//                   ),
-//                   if (timestamp != null)
-//                     Padding(
-//                       padding: const EdgeInsets.only(right: 8),
-//                       child: Text(
-//                         DateTime.parse(timestamp).toLocal().toString().substring(11, 16),
-//                         style: const TextStyle(fontSize: 12),
-//                       ),
-//                     ),
-//                 ],
-//               );
-//             },
-//           ),
-//         ],
-//       ),
-//       drawer: const AppDrawer(),
-//       body: Stack(
-//         children: [
-//           // ----- Dashboard area (will be filled later) -----
-//           ListView(
-//             controller: _scroll,
-//             padding: const EdgeInsets.only(bottom: 80),
-//             children: const [
-//               Center(
-//                 child: Padding(
-//                   padding: EdgeInsets.all(32),
-//                   child: Text(
-//                     'Welcome to CribLog!\nDashboard coming soon.',
-//                     textAlign: TextAlign.center,
-//                     style: TextStyle(fontSize: 18),
-//                   ),
-//                 ),
-//               ),
-//               SizedBox(height: 1200), // scrollable filler
-//             ],
-//           ),
-
-//           // ----- Collapsible floating bar -----
-//           AnimatedPositioned(
-//             duration: const Duration(milliseconds: 250),
-//             bottom: _showBar ? 0 : -80,
-//             left: 0,
-//             right: 0,
-//             child: const EntryBar(),
-//           ),
-//         ],
-//       ),
-//     );
-//   }
-// }

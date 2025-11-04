@@ -1,12 +1,13 @@
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:workmanager/workmanager.dart';
 import 'drive_service.dart';
 import 'database.dart';
 import '../models/sleep_entry.dart';
 import '../models/feeding_entry.dart';
 
 class SyncService {
-  final DriveService _driveService = DriveService(); // now returns the singleton
+  final DriveService _driveService = DriveService();
   final DatabaseService _dbService = DatabaseService();
 
   Future<bool> get isAuthorized async => await _driveService.isAuthorized;
@@ -23,10 +24,12 @@ class SyncService {
       final lastSync = prefs.getString('sync_last_timestamp') ?? DateTime(1970).toIso8601String();
       final lastSyncTimestamp = DateTime.parse(lastSync);
 
+      print("Try to pull");
       if (forcePull || await _hasPendingPull(lastSyncTimestamp)) {
         await _pullAndMergeDeltas();
       }
 
+      print("Try to push");
       if (await _hasPendingPush()) {
         await _pushPendingDeltas();
       }
@@ -34,11 +37,28 @@ class SyncService {
       await prefs.setString('sync_last_timestamp', DateTime.now().toIso8601String());
       await prefs.setString('sync_last_result', 'success');
     } catch (e) {
+      print(e);
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('sync_last_timestamp', DateTime.now().toIso8601String());
       await prefs.setString('sync_last_result', 'failed: $e');
       rethrow;
     }
+  }
+
+  Future<void> scheduleSync(int minutes) async {
+    if (minutes <= 0) return;
+    await Workmanager().registerPeriodicTask(
+      'auto-sync-task',
+      'auto-sync',
+      frequency: Duration(minutes: minutes),
+      constraints: Constraints(
+        networkType: NetworkType.connected,
+      ),
+    );
+  }
+
+  Future<void> cancelSync() async {
+    await Workmanager().cancelAll();
   }
 
   Future<void> _pullAndMergeDeltas() async {
@@ -155,13 +175,13 @@ class SyncService {
 
   Future<int> _getAutoSyncInterval() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getInt('sync_auto_interval') ?? 180; // 3 hours
+    return prefs.getInt('sync_auto_interval') ?? 180;
   }
 
   Future<void> logSleepInsert(SleepEntry entry) async {
     final userEmail = await _driveService.currentUserEmail ?? 'local';
     final updatedEntry = entry.copyWith(
-      lastModified: entry.lastModified,
+      lastModified: entry.lastModified ?? DateTime.now(),
       modifiedBy: userEmail,
     );
     await _dbService.insertSleepEntry(updatedEntry);
@@ -170,7 +190,7 @@ class SyncService {
   Future<void> logSleepUpdate(SleepEntry entry) async {
     final userEmail = await _driveService.currentUserEmail ?? 'local';
     final updatedEntry = entry.copyWith(
-      lastModified: entry.lastModified,
+      lastModified: entry.lastModified ?? DateTime.now(),
       modifiedBy: userEmail,
     );
     await _dbService.updateSleepEntry(updatedEntry);
@@ -183,7 +203,7 @@ class SyncService {
   Future<void> logFeedingInsert(FeedingEntry entry) async {
     final userEmail = await _driveService.currentUserEmail ?? 'local';
     final updatedEntry = entry.copyWith(
-      lastModified: entry.lastModified,
+      lastModified: entry.lastModified ?? DateTime.now(),
       modifiedBy: userEmail,
     );
     await _dbService.insertFeedingEntry(updatedEntry);
@@ -192,7 +212,7 @@ class SyncService {
   Future<void> logFeedingUpdate(FeedingEntry entry) async {
     final userEmail = await _driveService.currentUserEmail ?? 'local';
     final updatedEntry = entry.copyWith(
-      lastModified: entry.lastModified,
+      lastModified: entry.lastModified ?? DateTime.now(),
       modifiedBy: userEmail,
     );
     await _dbService.updateFeedingEntry(updatedEntry);

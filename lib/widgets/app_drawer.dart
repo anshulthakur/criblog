@@ -21,7 +21,8 @@ class AppDrawer extends StatelessWidget {
             title: const Text('Home'),
             onTap: () {
               Navigator.pop(context); // Close drawer
-              Navigator.pushReplacementNamed(context, '/');
+              //Navigator.pushReplacementNamed(context, '/');
+              Navigator.pushNamed(context, '/');
             },
           ),
           ListTile(
@@ -29,7 +30,8 @@ class AppDrawer extends StatelessWidget {
             title: const Text('Entries'),
             onTap: () {
               Navigator.pop(context); // Close drawer
-              Navigator.pushReplacementNamed(context, '/entries');
+              //Navigator.pushReplacementNamed(context, '/entries');
+              Navigator.pushNamed(context, '/entries');
             },
           ),
           ListTile(
@@ -37,7 +39,8 @@ class AppDrawer extends StatelessWidget {
             title: const Text('Log Activity'),
             onTap: () {
               Navigator.pop(context); // Close drawer
-              Navigator.pushReplacementNamed(context, '/input');
+              //Navigator.pushReplacementNamed(context, '/input');
+              Navigator.pushNamed(context, '/input');
             },
           ),
           ListTile(
@@ -45,7 +48,8 @@ class AppDrawer extends StatelessWidget {
             title: const Text('Settings'),
             onTap: () {
               Navigator.pop(context); // Close drawer
-              Navigator.pushReplacementNamed(context, '/settings');
+              //Navigator.pushReplacementNamed(context, '/settings');
+              Navigator.pushNamed(context, '/settings');
             },
           ),
         ],
