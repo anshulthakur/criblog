@@ -19,7 +19,7 @@
             android:layout_height="60dp"
             android:text="Start Feeding"
             android:textSize="14sp"
-            android:backgroundTint="@color/orange" />
+            android:background="@color/orange" />
         <TextView
             android:id="@+id/feeding_status"
             android:layout_width="match_parent"
@@ -43,7 +43,7 @@
             android:layout_height="60dp"
             android:text="Start Sleep"
             android:textSize="14sp"
-            android:backgroundTint="@color/green" />
+            android:background="@color/green" />
         <TextView
             android:id="@+id/sleep_status"
             android:layout_width="match_parent"
@@ -53,5 +53,4 @@
             android:gravity="center"
             android:layout_marginTop="4dp" />
     </LinearLayout>
-
 </LinearLayout>

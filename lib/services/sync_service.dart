@@ -6,44 +6,71 @@ import 'drive_service.dart';
 import 'database.dart';
 import '../models/sleep_entry.dart';
 import '../models/feeding_entry.dart';
+import 'widget_service.dart';
 
 class SyncService {
   final DriveService _driveService = DriveService();
   final DatabaseService _dbService = DatabaseService();
   bool _isSyncing = false; // Prevent concurrent syncs
 
-  Future<bool> get isAuthorized async => await _driveService.isAuthorized;
+  Future<bool> get isAuthorized async {
+    print('Check authorization');
+    final prefs = await SharedPreferences.getInstance();
+    final authorized = prefs.getBool('sync_drive_authorized') ?? false;
+    if (!authorized) return false;
+    print('Auth set in prefs, check drive');
+    return await _driveService.isAuthorized;
+  }
+
+  Future<bool> get isDriveAuthorized async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool('sync_drive_authorized') ?? false;
+  }
+
   Future<String?> get currentUserEmail async => await _driveService.currentUserEmail;
 
-  Future<void> sync({bool forcePull = false}) async {
-    if (_isSyncing) return; // Skip if already syncing
+  Future<void> sync({bool forcePull = false, bool isBackground = false}) async {
+    if (_isSyncing) {
+      debugPrint('Sync skipped: already in progress');
+      return;
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    final authorized = prefs.getBool('sync_drive_authorized') ?? false;
+    if (!authorized) {
+      debugPrint('Sync skipped: Drive not authorized in SharedPreferences');
+      if (isBackground) return;
+      throw Exception('Drive not authorized');
+    }
+
     if (!await isAuthorized) {
+      debugPrint('Sync skipped: Drive not authorized');
+      if (isBackground) return;
       throw Exception('Drive not authorized');
     }
 
     _isSyncing = true;
     try {
-      await _driveService.checkFolderAccess();
+      await _driveService.checkFolderAccess(isBackground: isBackground);
 
-      final prefs = await SharedPreferences.getInstance();
       final lastSync = prefs.getString('sync_last_timestamp') ?? DateTime(1970).toIso8601String();
       final lastSyncTimestamp = DateTime.parse(lastSync);
 
       if (forcePull || await _hasPendingPull(lastSyncTimestamp)) {
-        await _pullAndMergeDeltas();
+        await _pullAndMergeDeltas(isBackground: isBackground);
       }
 
       if (await _hasPendingPush()) {
-        await _pushPendingDeltas();
+        await _pushPendingDeltas(isBackground: isBackground);
       }
 
       await prefs.setString('sync_last_timestamp', DateTime.now().toIso8601String());
       await prefs.setString('sync_last_result', 'success');
     } catch (e) {
-      final prefs = await SharedPreferences.getInstance();
       await prefs.setString('sync_last_timestamp', DateTime.now().toIso8601String());
       await prefs.setString('sync_last_result', 'failed: $e');
-      rethrow;
+      debugPrint('Sync failed: $e');
+      if (!isBackground) rethrow;
     } finally {
       _isSyncing = false;
     }
@@ -65,8 +92,8 @@ class SyncService {
     await Workmanager().cancelAll();
   }
 
-  Future<void> _pullAndMergeDeltas() async {
-    final remoteData = await _driveService.pullDeltas();
+  Future<void> _pullAndMergeDeltas({bool isBackground = false}) async {
+    final remoteData = await _driveService.pullDeltas(isBackground: isBackground);
     final remoteTimestamp = DateTime.parse(remoteData['lastSyncTimestamp']);
     final prefs = await SharedPreferences.getInstance();
     final localTimestamp = DateTime.parse(prefs.getString('sync_last_timestamp') ?? '1970-01-01T00:00:00Z');
@@ -84,11 +111,11 @@ class SyncService {
     await prefs.setString('sync_last_timestamp', remoteTimestamp.toIso8601String());
   }
 
-  Future<void> _pushPendingDeltas() async {
+  Future<void> _pushPendingDeltas({bool isBackground = false}) async {
     final pendingDeltas = await _dbService.getPendingDeltas();
     if (pendingDeltas.isEmpty) return;
 
-    final remoteData = await _driveService.pullDeltas();
+    final remoteData = await _driveService.pullDeltas(isBackground: isBackground);
     final remoteDeltas = remoteData['deltas'] as List<dynamic>;
 
     final allDeltas = [...remoteDeltas];
@@ -125,7 +152,7 @@ class SyncService {
       'version': '1.0.0',
     };
 
-    await _driveService.pushDeltas(pushData);
+    await _driveService.pushDeltas(pushData, isBackground: isBackground);
     await _dbService.markDeltasSynced(deltaIds);
     await _dbService.clearSyncedDeltas();
   }
@@ -184,11 +211,17 @@ class SyncService {
 
   Future<void> _triggerBackgroundSync() async {
     if (await isAuthorized && !_isSyncing) {
-      try {
-        await sync();
-      } catch (e) {
-        debugPrint('Background sync failed: $e');
-      }
+      await Workmanager().registerOneOffTask(
+        'immediate-sync-${DateTime.now().millisecondsSinceEpoch}',
+        'immediate-sync',
+        constraints: Constraints(
+          networkType: NetworkType.connected,
+        ),
+        existingWorkPolicy: ExistingWorkPolicy.append,
+      );
+      debugPrint('Scheduled immediate background sync');
+    } else {
+      debugPrint('Background sync not triggered: authorized=${await isAuthorized}, isSyncing=$_isSyncing');
     }
   }
 
@@ -226,6 +259,7 @@ class SyncService {
     );
     final id = await _dbService.insertFeedingEntry(updatedEntry);
     await _triggerBackgroundSync();
+    await WidgetService.syncAppToWidget();
     return id;
   }
 
@@ -237,11 +271,13 @@ class SyncService {
     );
     await _dbService.updateFeedingEntry(updatedEntry);
     await _triggerBackgroundSync();
+    await WidgetService.syncAppToWidget();
   }
 
   Future<void> logFeedingDelete(int id) async {
     await _dbService.deleteFeedingEntry(id);
     await _triggerBackgroundSync();
+    await WidgetService.syncAppToWidget();
   }
 }
 

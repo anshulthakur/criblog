@@ -14,7 +14,6 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   final SyncService _syncService = SyncService();
   final DriveService _driveService = DriveService();
-  bool _driveAuthorized = false;
   int _autoSyncInterval = 180; // minutes (3 hours)
   bool _isSigningIn = false;
 
@@ -37,48 +36,49 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _loadConfig() async {
     final prefs = await SharedPreferences.getInstance();
-    final authorized = await _syncService.isAuthorized;
     setState(() {
-      _driveAuthorized = authorized;
       _autoSyncInterval = prefs.getInt('sync_auto_interval') ?? 180;
       _selectedInterval = _intervals.indexWhere((i) => i['minutes'] == _autoSyncInterval);
       if (_selectedInterval == -1) _selectedInterval = 3;
     });
   }
 
-  Future<void> _toggleDriveAuth() async {
+  Future<void> _authorize() async {
     setState(() => _isSigningIn = true);
-    final prefs = await SharedPreferences.getInstance();
     try {
-      if (_driveAuthorized) {
-        await _driveService.signOut();
-        await _syncService.cancelSync();
-        await prefs.setBool('sync_drive_authorized', false);
-        setState(() => _driveAuthorized = false);
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Signed out from Google Drive')),
-          );
-        }
-      } else {
-        await Future.delayed(const Duration(milliseconds: 300));
-        await _driveService.signIn();
-        await _driveService.checkFolderAccess();
-        await prefs.setBool('sync_drive_authorized', true);
-        setState(() => _driveAuthorized = true);
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Drive authorized successfully')),
-          );
-        }
-        await _updateAutoSync();
+      await _driveService.signIn();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Drive authorized successfully')),
+        );
       }
+      await _updateAutoSync();
+      setState(() {});
     } catch (e) {
-      await prefs.setBool('sync_drive_authorized', false);
-      setState(() => _driveAuthorized = false);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Authorization failed: $e')),
+        );
+      }
+    }
+    setState(() => _isSigningIn = false);
+  }
+
+  Future<void> _signOut() async {
+    setState(() => _isSigningIn = true);
+    try {
+      await _driveService.signOut();
+      await _syncService.cancelSync();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Signed out from Google Drive')),
+        );
+      }
+      setState(() {});
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Sign out failed: $e')),
         );
       }
     }
@@ -91,7 +91,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await prefs.setInt('sync_auto_interval', minutes);
     setState(() => _autoSyncInterval = minutes);
 
-    if (_driveAuthorized && minutes > 0) {
+    if (await _syncService.isDriveAuthorized && minutes > 0) {
       await _syncService.scheduleSync(minutes);
     } else {
       await _syncService.cancelSync();
@@ -104,25 +104,57 @@ class _SettingsScreenState extends State<SettingsScreen> {
       padding: const EdgeInsets.all(16),
       children: [
         Card(
-          child: SwitchListTile(
+          child: ListTile(
             title: const Text('Google Drive Sync'),
             subtitle: const Text('Backup and sync across devices'),
-            value: _driveAuthorized,
-            onChanged: _isSigningIn ? null : (_) => _toggleDriveAuth(),
-            secondary: _driveAuthorized
-                ? const Icon(Icons.cloud_done, color: Colors.green)
-                : const Icon(Icons.cloud_off, color: Colors.grey),
+            trailing: FutureBuilder<bool>(
+              future: _syncService.isDriveAuthorized,
+              builder: (context, snapshot) {
+                final isAuthorized = snapshot.data ?? false;
+                return ElevatedButton(
+                  onPressed: _isSigningIn ? null : _authorize,
+                  child: Text(isAuthorized ? 'Re-authorize' : 'Authorize'),
+                );
+              },
+            ),
           ),
         ),
-        if (_driveAuthorized)
-          ListTile(
-            title: const Text('Shared Folder'),
-            subtitle: Text('Folder ID: ${_driveService.folderId.substring(0, 20)}...'),
-            trailing: const Icon(Icons.folder),
-            onTap: () {
-              // TODO: Copy folder ID to clipboard
-            },
-          ),
+        FutureBuilder<bool>(
+          future: _syncService.isDriveAuthorized,
+          builder: (context, snapshot) {
+            final isAuthorized = snapshot.data ?? false;
+            return Visibility(
+              visible: isAuthorized,
+              child: Card(
+                child: ListTile(
+                  title: const Text('Sign Out'),
+                  subtitle: const Text('Disconnect from Google Drive'),
+                  trailing: ElevatedButton(
+                    onPressed: _isSigningIn ? null : _signOut,
+                    child: const Text('Sign Out'),
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+        FutureBuilder<bool>(
+          future: _syncService.isDriveAuthorized,
+          builder: (context, snapshot) {
+            final isAuthorized = snapshot.data ?? false;
+            return Visibility(
+              visible: isAuthorized,
+              child: ListTile(
+                title: const Text('Shared Folder'),
+                subtitle: Text('Folder ID: ${_driveService.folderId.substring(0, 20)}...'),
+                trailing: const Icon(Icons.folder),
+                onTap: () {
+                  // TODO: Copy folder ID to clipboard
+                },
+              ),
+            );
+          },
+        ),
         const Divider(),
         Card(
           child: Column(
@@ -139,22 +171,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       child: Text(entry.value['label']),
                     );
                   }).toList(),
-                  onChanged: _driveAuthorized
-                      ? (value) {
+                  onChanged: _isSigningIn
+                      ? null
+                      : (value) {
                           setState(() => _selectedInterval = value!);
                           _updateAutoSync();
-                        }
-                      : null,
+                        },
                 ),
               ),
-              if (_driveAuthorized)
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: Text(
-                    'Next sync: ${_intervals[_selectedInterval]['label']}',
-                    style: TextStyle(color: Colors.grey[600], fontSize: 12),
-                  ),
-                ),
+              FutureBuilder<bool>(
+                future: _syncService.isDriveAuthorized,
+                builder: (context, snapshot) {
+                  final isAuthorized = snapshot.data ?? false;
+                  return Visibility(
+                    visible: isAuthorized,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Text(
+                        'Next sync: ${_intervals[_selectedInterval]['label']}',
+                        style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                      ),
+                    ),
+                  );
+                },
+              ),
             ],
           ),
         ),
