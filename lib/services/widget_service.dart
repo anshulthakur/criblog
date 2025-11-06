@@ -1,21 +1,22 @@
-// lib/services/widget_service.dart
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import 'package:home_widget/home_widget.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:workmanager/workmanager.dart';
-import 'package:home_widget/home_widget.dart';
 import '../models/sleep_entry.dart';
 import '../models/feeding_entry.dart';
 import 'database.dart';
+import 'sync_service.dart';
+import '../app_state.dart';
 
 class WidgetService {
   static const String _keyOngoingSleep = 'ongoing_sleep';
   static const String _keyOngoingFeeding = 'ongoing_feeding';
   static const String _keyFeedingSource = 'feeding_source';
 
-  static Future<Map<String, dynamic>> handleFeedingFromWidget() async {
+  static Future<Map<String, dynamic>> handleFeedingFromWidget({AppState? appState}) async {
     debugPrint("handleFeedingFromWidget");
     try {
+      final syncService = SyncService(appState: appState);
       final prefs = await SharedPreferences.getInstance();
       final wasOngoing = prefs.getBool(_keyOngoingFeeding) ?? false;
       debugPrint('Handling feeding action, wasOngoing: $wasOngoing');
@@ -24,8 +25,12 @@ class WidgetService {
       if (wasOngoing) {
         final ongoing = await DatabaseService().getOngoingFeeding();
         if (ongoing != null) {
-          await DatabaseService().updateFeedingEntry(
-            ongoing.copyWith(endTime: now),
+          await syncService.logFeedingUpdate(
+            ongoing.copyWith(
+              endTime: now,
+              lastModified: now,
+              modifiedBy: await syncService.currentUserEmail ?? 'local',
+            ),
           );
           debugPrint('Updated feeding entry with endTime: $now');
         }
@@ -36,8 +41,10 @@ class WidgetService {
           startTime: now,
           endTime: null,
           source: FeedingSource.breast,
+          lastModified: now,
+          modifiedBy: await syncService.currentUserEmail ?? 'local',
         );
-        await DatabaseService().insertFeedingEntry(entry);
+        await syncService.logFeedingInsert(entry);
         debugPrint('Inserted new feeding entry: $entry');
         await prefs.setBool(_keyOngoingFeeding, true);
         debugPrint('Set ongoing_feeding=true');
@@ -54,8 +61,10 @@ class WidgetService {
     }
   }
 
-  static Future<Map<String, dynamic>> handleSleepFromWidget() async {
+  static Future<Map<String, dynamic>> handleSleepFromWidget({AppState? appState}) async {
+    debugPrint("handleSleepFromWidget");
     try {
+      final syncService = SyncService(appState: appState);
       final prefs = await SharedPreferences.getInstance();
       final wasOngoing = prefs.getBool(_keyOngoingSleep) ?? false;
       debugPrint('Handling sleep action, wasOngoing: $wasOngoing');
@@ -64,16 +73,24 @@ class WidgetService {
       if (wasOngoing) {
         final ongoing = await DatabaseService().getOngoingSleep();
         if (ongoing != null) {
-          await DatabaseService().updateSleepEntry(
-            ongoing.copyWith(endTime: now),
+          await syncService.logSleepUpdate(
+            ongoing.copyWith(
+              endTime: now,
+              lastModified: now,
+              modifiedBy: await syncService.currentUserEmail ?? 'local',
+            ),
           );
           debugPrint('Updated sleep entry with endTime: $now');
         }
         await prefs.setBool(_keyOngoingSleep, false);
         debugPrint('Set ongoing_sleep=false');
       } else {
-        final entry = SleepEntry(startTime: now);
-        await DatabaseService().insertSleepEntry(entry);
+        final entry = SleepEntry(
+          startTime: now,
+          lastModified: now,
+          modifiedBy: await syncService.currentUserEmail ?? 'local',
+        );
+        await syncService.logSleepInsert(entry);
         debugPrint('Inserted new sleep entry: $entry');
         await prefs.setBool(_keyOngoingSleep, true);
         debugPrint('Set ongoing_sleep=true');
@@ -90,7 +107,7 @@ class WidgetService {
     }
   }
 
-  static Future<void> syncAppToWidget({bool triggerUpdate = true}) async {
+  static Future<void> syncAppToWidget({bool triggerUpdate = true, AppState? appState}) async {
     debugPrint("syncAppToWidget");
     try {
       final ongoingSleep = await DatabaseService().getOngoingSleep();
@@ -108,11 +125,13 @@ class WidgetService {
       debugPrint('Prefs updated: sleep=${prefs.getBool(_keyOngoingSleep)}, feeding=${prefs.getBool(_keyOngoingFeeding)}, source=${prefs.getString(_keyFeedingSource)}');
 
       await _updateWidgetFromPrefs(triggerUpdate: triggerUpdate);
+      if (appState != null && (ongoingSleep != null || ongoingFeeding != null)) {
+        appState.notifyDatabaseChanged();
+      }
     } catch (e) {
       debugPrint('Error syncing app to widget: $e');
     }
   }
-
 
   static Future<void> _updateWidgetFromPrefs({bool triggerUpdate = true}) async {
     debugPrint("_updateWidgetFromPrefs");

@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../services/database.dart';
 import '../services/sync_service.dart';
 import '../models/sleep_entry.dart';
 import '../models/feeding_entry.dart';
+import '../app_state.dart';
 
 mixin EntryController<T extends StatefulWidget> on State<T> {
   bool _isSleepOngoing = false;
@@ -20,21 +22,44 @@ mixin EntryController<T extends StatefulWidget> on State<T> {
   FeedingEntry? get lastFeeding => _lastFeeding;
 
   @mustCallSuper
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.read<AppState>().addListener(_onAppStateChanged);
+      _refreshStatus();
+    });
+  }
+
+  @mustCallSuper
+  @override
+  void dispose() {
+    context.read<AppState>().removeListener(_onAppStateChanged);
+    super.dispose();
+  }
+
+  void _onAppStateChanged() {
+    debugPrint('EntryController: AppState changed, refreshing status');
+    _refreshStatus();
+  }
+
   Future<void> initEntryState() async => _refreshStatus();
 
   Future<void> refreshEntryState() async => _refreshStatus();
 
   Future<void> _refreshStatus() async {
+    debugPrint('EntryController: Refreshing status');
     final ongoingSleep = await _dbService.getOngoingSleep();
     final ongoingFeeding = await _dbService.getOngoingFeeding();
 
     setState(() {
       _isSleepOngoing = ongoingSleep != null;
       _lastSleep = ongoingSleep;
-
       _isFeedingOngoing = ongoingFeeding != null;
       _lastFeeding = ongoingFeeding;
       _selectedSource = ongoingFeeding?.source ?? FeedingSource.breast;
+      debugPrint(
+          'EntryController: Updated state - sleep: $_isSleepOngoing, feeding: $_isFeedingOngoing, source: $_selectedSource');
     });
   }
 
@@ -116,7 +141,10 @@ mixin EntryController<T extends StatefulWidget> on State<T> {
     await _refreshStatus();
   }
 
-  void setFeedingSource(FeedingSource source) => setState(() => _selectedSource = source);
+  void setFeedingSource(FeedingSource source) => setState(() {
+        _selectedSource = source;
+        debugPrint('EntryController: Set feeding source to $source');
+      });
 
   void _snack(String msg) {
     if (!mounted) return;

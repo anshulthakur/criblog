@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:provider/provider.dart';
 import '../services/database.dart';
 import '../services/sync_service.dart';
 import '../models/sleep_entry.dart';
 import '../models/feeding_entry.dart';
+import '../app_state.dart';
 
 class EntriesScreen extends StatefulWidget {
   const EntriesScreen({super.key});
@@ -25,15 +27,29 @@ class _EntriesScreenState extends State<EntriesScreen> {
   int _totalCount = 0;
 
   final DatabaseService _dbService = DatabaseService();
-  final SyncService _syncService = SyncService();
+  late final SyncService _syncService;
 
   @override
   void initState() {
     super.initState();
+    _syncService = SyncService(appState: context.read<AppState>());
+    context.read<AppState>().addListener(_onAppStateChanged);
+    _loadEntries();
+  }
+
+  @override
+  void dispose() {
+    context.read<AppState>().removeListener(_onAppStateChanged);
+    super.dispose();
+  }
+
+  void _onAppStateChanged() {
+    debugPrint('EntriesScreen: AppState changed, refreshing entries');
     _loadEntries();
   }
 
   Future<void> _loadEntries() async {
+    debugPrint('EntriesScreen: Loading entries, page: $_currentPage');
     final entries = await _dbService.getCombinedEntries(
       fromDate: _fromDate,
       toDate: _toDate,
@@ -53,6 +69,7 @@ class _EntriesScreenState extends State<EntriesScreen> {
       showFeeding: _showFeeding,
     );
 
+    debugPrint('EntriesScreen: Loaded ${entries.length} entries, total: $count');
     setState(() {
       _entries = entries;
       _totalCount = count;
@@ -194,7 +211,6 @@ class _EntriesScreenState extends State<EntriesScreen> {
     } else if (entry is FeedingEntry) {
       await _showEditFeedingDialog(entry);
     }
-    _loadEntries();
   }
 
   Future<void> _showEditSleepDialog(SleepEntry entry) async {
@@ -295,7 +311,7 @@ class _EntriesScreenState extends State<EntriesScreen> {
                   startTime: startTime,
                   endTime: isOngoing ? null : endTime,
                   lastModified: DateTime.now(),
-                  modifiedBy: 'local', // Will be updated by SyncService
+                  modifiedBy: 'local',
                 );
                 _syncService.logSleepUpdate(updated);
                 Navigator.pop(context);
@@ -419,7 +435,7 @@ class _EntriesScreenState extends State<EntriesScreen> {
                   endTime: isOngoing ? null : endTime,
                   source: source,
                   lastModified: DateTime.now(),
-                  modifiedBy: 'local', // Will be updated by SyncService
+                  modifiedBy: 'local',
                 );
                 _syncService.logFeedingUpdate(updated);
                 Navigator.pop(context);
@@ -457,7 +473,6 @@ class _EntriesScreenState extends State<EntriesScreen> {
       } else if (entry is FeedingEntry) {
         await _syncService.logFeedingDelete(entry.id!);
       }
-      _loadEntries();
     }
   }
 
@@ -471,77 +486,84 @@ class _EntriesScreenState extends State<EntriesScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        ToggleButtons(
-          isSelected: [_showSleep, _showFeeding],
-          onPressed: (index) {
-            setState(() {
-              if (index == 0) _showSleep = !_showSleep;
-              if (index == 1) _showFeeding = !_showFeeding;
-              _currentPage = 0;
-            });
-            _loadEntries();
-          },
-          children: const [
-            Padding(padding: EdgeInsets.symmetric(horizontal: 16), child: Text('Sleep')),
-            Padding(padding: EdgeInsets.symmetric(horizontal: 16), child: Text('Feeding')),
-          ],
-        ),
-        Expanded(
-          child: _entries.isEmpty
-              ? const Center(child: Text('No entries found'))
-              : ListView.builder(
-                  itemCount: _entries.length,
-                  itemBuilder: (context, index) {
-                    final entry = _entries[index];
-                    final startStr = DateFormat('yyyy-MM-dd HH:mm').format(entry.startTime);
-                    final endStr = entry.endTime != null ? DateFormat('HH:mm').format(entry.endTime) : 'Ongoing';
-                    final duration = _formatDuration(entry.startTime, entry.endTime);
+    return Consumer<AppState>(
+      builder: (context, appState, child) {
+        return RefreshIndicator(
+          onRefresh: _loadEntries,
+          child: Column(
+            children: [
+              ToggleButtons(
+                isSelected: [_showSleep, _showFeeding],
+                onPressed: (index) {
+                  setState(() {
+                    if (index == 0) _showSleep = !_showSleep;
+                    if (index == 1) _showFeeding = !_showFeeding;
+                    _currentPage = 0;
+                  });
+                  _loadEntries();
+                },
+                children: const [
+                  Padding(padding: EdgeInsets.symmetric(horizontal: 16), child: Text('Sleep')),
+                  Padding(padding: EdgeInsets.symmetric(horizontal: 16), child: Text('Feeding')),
+                ],
+              ),
+              Expanded(
+                child: _entries.isEmpty
+                    ? const Center(child: Text('No entries found'))
+                    : ListView.builder(
+                        itemCount: _entries.length,
+                        itemBuilder: (context, index) {
+                          final entry = _entries[index];
+                          final startStr = DateFormat('yyyy-MM-dd HH:mm').format(entry.startTime);
+                          final endStr = entry.endTime != null ? DateFormat('HH:mm').format(entry.endTime) : 'Ongoing';
+                          final duration = _formatDuration(entry.startTime, entry.endTime);
 
-                    return Card(
-                      child: ListTile(
-                        title: entry is SleepEntry
-                            ? Text('Sleep: $startStr - $endStr')
-                            : Text('Feeding (${(entry as FeedingEntry).source.name}): $startStr - $endStr'),
-                        subtitle: Text('Duration: $duration'),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            IconButton(
-                              icon: const Icon(Icons.edit),
-                              onPressed: () => _editEntry(entry),
+                          return Card(
+                            child: ListTile(
+                              title: entry is SleepEntry
+                                  ? Text('Sleep: $startStr - $endStr')
+                                  : Text('Feeding (${(entry as FeedingEntry).source.name}): $startStr - $endStr'),
+                              subtitle: Text('Duration: $duration'),
+                              trailing: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  IconButton(
+                                    icon: const Icon(Icons.edit),
+                                    onPressed: () => _editEntry(entry),
+                                  ),
+                                  IconButton(
+                                    icon: const Icon(Icons.delete),
+                                    onPressed: () => _deleteEntry(entry),
+                                  ),
+                                ],
+                              ),
                             ),
-                            IconButton(
-                              icon: const Icon(Icons.delete),
-                              onPressed: () => _deleteEntry(entry),
-                            ),
-                          ],
-                        ),
+                          );
+                        },
                       ),
-                    );
-                  },
+              ),
+              if (_totalCount > _itemsPerPage)
+                Padding(
+                  padding: const EdgeInsets.all(8.0),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.arrow_back),
+                        onPressed: _currentPage > 0 ? _previousPage : null,
+                      ),
+                      Text('Page ${_currentPage + 1} of ${(_totalCount / _itemsPerPage).ceil()}'),
+                      IconButton(
+                        icon: const Icon(Icons.arrow_forward),
+                        onPressed: (_currentPage + 1) * _itemsPerPage < _totalCount ? _nextPage : null,
+                      ),
+                    ],
+                  ),
                 ),
-        ),
-        if (_totalCount > _itemsPerPage)
-          Padding(
-            padding: const EdgeInsets.all(8.0),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                IconButton(
-                  icon: const Icon(Icons.arrow_back),
-                  onPressed: _currentPage > 0 ? _previousPage : null,
-                ),
-                Text('Page ${_currentPage + 1} of ${(_totalCount / _itemsPerPage).ceil()}'),
-                IconButton(
-                  icon: const Icon(Icons.arrow_forward),
-                  onPressed: (_currentPage + 1) * _itemsPerPage < _totalCount ? _nextPage : null,
-                ),
-              ],
-            ),
+            ],
           ),
-      ],
+        );
+      },
     );
   }
 }

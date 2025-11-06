@@ -1,4 +1,3 @@
-// lib/widgets/entry_bar.dart
 import 'package:flutter/material.dart';
 import '../core/entry_controller.dart';
 import '../models/feeding_entry.dart';
@@ -14,7 +13,7 @@ class _EntryBarState extends State<EntryBar> with EntryController<EntryBar> {
   @override
   void initState() {
     super.initState();
-    initEntryState();               // loads ongoing status
+    initEntryState();
   }
 
   @override
@@ -24,7 +23,6 @@ class _EntryBarState extends State<EntryBar> with EntryController<EntryBar> {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: Row(
         children: [
-          // ---- Feeding (no selector) ----
           Expanded(
             child: ElevatedButton(
               style: ElevatedButton.styleFrom(
@@ -32,7 +30,6 @@ class _EntryBarState extends State<EntryBar> with EntryController<EntryBar> {
                 minimumSize: const Size(double.infinity, 48),
               ),
               onPressed: () {
-                // Force Breast when using the floating bar
                 if (!isFeedingOngoing) setFeedingSource(FeedingSource.breast);
                 toggleFeeding();
               },
@@ -43,8 +40,6 @@ class _EntryBarState extends State<EntryBar> with EntryController<EntryBar> {
             ),
           ),
           const SizedBox(width: 12),
-
-          // ---- Sleep ----
           Expanded(
             child: ElevatedButton(
               style: ElevatedButton.styleFrom(

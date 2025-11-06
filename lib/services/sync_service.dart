@@ -7,11 +7,15 @@ import 'database.dart';
 import '../models/sleep_entry.dart';
 import '../models/feeding_entry.dart';
 import 'widget_service.dart';
+import '../app_state.dart';
 
 class SyncService {
   final DriveService _driveService = DriveService();
   final DatabaseService _dbService = DatabaseService();
+  final AppState? _appState;
   bool _isSyncing = false;
+
+  SyncService({AppState? appState}) : _appState = appState;
 
   Future<bool> get isAuthorized async {
     return await _driveService.isAuthorized;
@@ -55,6 +59,7 @@ class SyncService {
 
       await prefs.setString('sync_last_timestamp', DateTime.now().toIso8601String());
       await prefs.setString('sync_last_result', 'success');
+      _appState?.notifyDatabaseChanged();
     } catch (e) {
       await prefs.setString('sync_last_timestamp', DateTime.now().toIso8601String());
       await prefs.setString('sync_last_result', 'failed: $e');
@@ -82,6 +87,7 @@ class SyncService {
     }
 
     await prefs.setString('sync_last_timestamp', remoteTimestamp.toIso8601String());
+    _appState?.notifyDatabaseChanged();
   }
 
   Future<void> _pushPendingDeltas({bool isBackground = false}) async {
@@ -128,6 +134,7 @@ class SyncService {
     await _driveService.pushDeltas(pushData, isBackground: isBackground);
     await _dbService.markDeltasSynced(deltaIds);
     await _dbService.clearSyncedDeltas();
+    _appState?.notifyDatabaseChanged();
   }
 
   Future<void> _applyDelta(_Delta delta) async {
@@ -190,6 +197,7 @@ class SyncService {
         debugPrint('Sync after sleep insert failed: $e');
       }
     }
+    _appState?.notifyDatabaseChanged();
     return id;
   }
 
@@ -203,10 +211,13 @@ class SyncService {
     if (await isAuthorized) {
       try {
         await sync();
-      } catch (e) {
+      } catch (e
+
+) {
         debugPrint('Sync after sleep update failed: $e');
       }
     }
+    _appState?.notifyDatabaseChanged();
   }
 
   Future<void> logSleepDelete(int id) async {
@@ -218,6 +229,7 @@ class SyncService {
         debugPrint('Sync after sleep delete failed: $e');
       }
     }
+    _appState?.notifyDatabaseChanged();
   }
 
   Future<int> logFeedingInsert(FeedingEntry entry) async {
@@ -231,11 +243,12 @@ class SyncService {
     if (await isAuthorized) {
       try {
         await sync();
-        await WidgetService.syncAppToWidget(triggerUpdate: false);
+        await WidgetService.syncAppToWidget(triggerUpdate: false, appState: _appState);
       } catch (e) {
         debugPrint('Sync after feeding insert failed: $e');
       }
     }
+    _appState?.notifyDatabaseChanged();
     return id;
   }
 
@@ -250,11 +263,12 @@ class SyncService {
     if (await isAuthorized) {
       try {
         await sync();
-        await WidgetService.syncAppToWidget(triggerUpdate: false);
+        await WidgetService.syncAppToWidget(triggerUpdate: false, appState: _appState);
       } catch (e) {
         debugPrint('Sync after feeding update failed: $e');
       }
     }
+    _appState?.notifyDatabaseChanged();
   }
 
   Future<void> logFeedingDelete(int id) async {
@@ -263,11 +277,12 @@ class SyncService {
     if (await isAuthorized) {
       try {
         await sync();
-        await WidgetService.syncAppToWidget(triggerUpdate: false);
+        await WidgetService.syncAppToWidget(triggerUpdate: false, appState: _appState);
       } catch (e) {
         debugPrint('Sync after feeding delete failed: $e');
       }
     }
+    _appState?.notifyDatabaseChanged();
   }
 }
 

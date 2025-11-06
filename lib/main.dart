@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:workmanager/workmanager.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:home_widget/home_widget.dart';
+import 'package:provider/provider.dart';
 import 'services/database.dart';
 import 'services/drive_service.dart';
 import 'services/sync_service.dart';
@@ -13,6 +14,7 @@ import 'screens/entries_screen.dart';
 import 'screens/input_screen.dart';
 import 'screens/settings_screen.dart';
 import 'widgets/app_drawer.dart';
+import 'app_state.dart';
 
 /// WorkManager dispatcher – runs in background
 @pragma('vm:entry-point')
@@ -20,18 +22,20 @@ void callbackDispatcher() {
   Workmanager().executeTask((task, inputData) async {
     debugPrint("Background task started: $task, inputData: $inputData");
     try {
+      // AppState is passed via inputData or created (non-UI context)
+      final appState = AppState();
       switch (task) {
         case 'immediate-sync':
-          final syncService = SyncService();
+          final syncService = SyncService(appState: appState);
           await syncService.sync(isBackground: true);
           debugPrint('Sync task completed: $task');
           break;
         case 'widget-feeding-toggle':
-          await WidgetService.handleFeedingFromWidget();
+          await WidgetService.handleFeedingFromWidget(appState: appState);
           debugPrint('Feeding toggle completed');
           break;
         case 'widget-sleep-toggle':
-          await WidgetService.handleSleepFromWidget();
+          await WidgetService.handleSleepFromWidget(appState: appState);
           debugPrint('Sleep toggle completed');
           break;
         default:
@@ -59,6 +63,9 @@ void main() async {
     isInDebugMode: true,
   );
 
+  // Create single AppState instance
+  final appState = AppState();
+
   // --- MethodChannel: receives actions from Kotlin WidgetWorker ---
   const platform = MethodChannel('me.bhaad.criblog/widget');
   platform.setMethodCallHandler((call) async {
@@ -69,10 +76,10 @@ void main() async {
         debugPrint('MethodChannel handleAction: $type');
         Map<String, dynamic> result;
         if (type == 'feeding') {
-          result = await WidgetService.handleFeedingFromWidget();
+          result = await WidgetService.handleFeedingFromWidget(appState: appState);
           debugPrint('Handled feeding action via MethodChannel');
         } else if (type == 'sleep') {
-          result = await WidgetService.handleSleepFromWidget();
+          result = await WidgetService.handleSleepFromWidget(appState: appState);
           debugPrint('Handled sleep action via MethodChannel');
         } else {
           debugPrint('Unknown action type: $type');
@@ -90,9 +97,14 @@ void main() async {
   });
 
   // Sync app state → widget on launch
-  await WidgetService.syncAppToWidget();
+  await WidgetService.syncAppToWidget(appState: appState);
 
-  runApp(const CribLogApp());
+  runApp(
+    ChangeNotifierProvider(
+      create: (_) => appState,
+      child: const CribLogApp(),
+    ),
+  );
 }
 
 class CribLogApp extends StatelessWidget {
@@ -106,14 +118,14 @@ class CribLogApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       initialRoute: '/',
       routes: {
-        '/': (_) => const RootScaffold(child: HomeScreen()),
-        '/entries': (_) => const RootScaffold(child: EntriesScreen()),
-        '/settings': (_) => const RootScaffold(child: SettingsScreen()),
-        '/input': (_) => const RootScaffold(child: InputScreen()),
+        '/': (_) => RootScaffold(child: const HomeScreen()),
+        '/entries': (_) => RootScaffold(child: const EntriesScreen()),
+        '/settings': (_) => RootScaffold(child: const SettingsScreen()),
+        '/input': (_) => RootScaffold(child: const InputScreen()),
       },
       onGenerateRoute: (settings) {
         return MaterialPageRoute(
-          builder: (_) => const RootScaffold(child: HomeScreen()),
+          builder: (_) => RootScaffold(child: const HomeScreen()),
         );
       },
     );
@@ -129,8 +141,15 @@ class RootScaffold extends StatefulWidget {
 }
 
 class _RootScaffoldState extends State<RootScaffold> {
-  final syncService = SyncService();
+  late final SyncService syncService;
+
   final List<String> _routeHistory = ['/'];
+
+  @override
+  void initState() {
+    super.initState();
+    syncService = SyncService(appState: Provider.of<AppState>(context, listen: false));
+  }
 
   @override
   void didChangeDependencies() {
