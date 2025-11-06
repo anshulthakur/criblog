@@ -17,18 +17,14 @@ class SyncService {
 
   SyncService({AppState? appState}) : _appState = appState;
 
-  Future<bool> get isAuthorized async {
-    return await _driveService.isAuthorized;
-  }
-
+  Future<bool> get isAuthorized async => await _driveService.isAuthorized;
   Future<bool> get isDriveAuthorized async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getBool('sync_drive_authorized') ?? false;
   }
-
   Future<String?> get currentUserEmail async => await _driveService.currentUserEmail;
 
-  Future<void> sync({bool forcePull = false, bool isBackground = false}) async {
+  Future<void> sync({bool forcePull = false, bool isBackground = false, int retryCount = 3}) async {
     if (_isSyncing) {
       debugPrint('Sync skipped: already in progress');
       return;
@@ -43,33 +39,41 @@ class SyncService {
     }
 
     _isSyncing = true;
-    try {
-      await _driveService.checkFolderAccess(isBackground: isBackground);
+    int attempts = 0;
+    while (attempts < retryCount) {
+      try {
+        await _driveService.checkFolderAccess(isBackground: isBackground);
+        final lastSync = prefs.getString('sync_last_timestamp') ?? '1970-01-01T00:00:00.000000Z';
+        final lastSyncTimestamp = DateTime.parse(lastSync);
 
-      final lastSync = prefs.getString('sync_last_timestamp') ?? DateTime(1970).toIso8601String();
-      final lastSyncTimestamp = DateTime.parse(lastSync);
+        if (forcePull || await _hasPendingPull(lastSyncTimestamp)) {
+          await _pullAndMergeDeltas(isBackground: isBackground);
+        }
 
-      if (forcePull || await _hasPendingPull(lastSyncTimestamp)) {
-        await _pullAndMergeDeltas(isBackground: isBackground);
+        if (await _hasPendingPush()) {
+          await _pushPendingDeltas(isBackground: isBackground);
+        }
+
+        await prefs.setString('sync_last_timestamp', DateTime.now().toUtc().toIso8601String().replaceAll(RegExp(r'Z|\.\d{3,6}Z'), '.000000Z'));
+        await prefs.setString('sync_last_result', 'success');
+        if (!isBackground) {
+          _appState?.notifyDatabaseChanged();
+          debugPrint('Sync: Notified AppState');
+        }
+        return;
+      } catch (e) {
+        attempts++;
+        debugPrint('Sync attempt $attempts failed: $e');
+        if (attempts >= retryCount) {
+          await prefs.setString('sync_last_timestamp', DateTime.now().toUtc().toIso8601String().replaceAll(RegExp(r'Z|\.\d{3,6}Z'), '.000000Z'));
+          await prefs.setString('sync_last_result', 'failed: $e');
+          debugPrint('Sync failed after $retryCount attempts: $e');
+          if (!isBackground) rethrow;
+        }
+        await Future.delayed(Duration(seconds: 2 * attempts));
+      } finally {
+        _isSyncing = false;
       }
-
-      if (await _hasPendingPush()) {
-        await _pushPendingDeltas(isBackground: isBackground);
-      }
-
-      await prefs.setString('sync_last_timestamp', DateTime.now().toIso8601String());
-      await prefs.setString('sync_last_result', 'success');
-      if (!isBackground) {
-        _appState?.notifyDatabaseChanged();
-        debugPrint('Sync: Notified AppState');
-      }
-    } catch (e) {
-      await prefs.setString('sync_last_timestamp', DateTime.now().toIso8601String());
-      await prefs.setString('sync_last_result', 'failed: $e');
-      debugPrint('Sync failed: $e');
-      if (!isBackground) rethrow;
-    } finally {
-      _isSyncing = false;
     }
   }
 
@@ -77,19 +81,25 @@ class SyncService {
     final remoteData = await _driveService.pullDeltas(isBackground: isBackground);
     final remoteTimestamp = DateTime.parse(remoteData['lastSyncTimestamp']);
     final prefs = await SharedPreferences.getInstance();
-    final localTimestamp = DateTime.parse(prefs.getString('sync_last_timestamp') ?? '1970-01-01T00:00:00Z');
+    final localTimestamp = DateTime.parse(prefs.getString('sync_last_timestamp') ?? '1970-01-01T00:00:00.000000Z');
 
-    if (remoteTimestamp.isBefore(localTimestamp)) return;
+    if (remoteTimestamp.isBefore(localTimestamp) || remoteTimestamp.isAtSameMomentAs(localTimestamp)) {
+      debugPrint('Pull skipped: remoteTimestamp=$remoteTimestamp <= localTimestamp=$localTimestamp');
+      return;
+    }
 
     final deltas = remoteData['deltas'] as List;
     for (final deltaJson in deltas) {
       final delta = _Delta.fromJson(deltaJson);
-      if (delta.timestamp.isBefore(localTimestamp)) continue;
+      if (delta.timestamp.isBefore(localTimestamp) || delta.timestamp.isAtSameMomentAs(localTimestamp)) {
+        debugPrint('Skipped delta: timestamp=${delta.timestamp} <= localTimestamp=$localTimestamp');
+        continue;
+      }
 
       await _applyDelta(delta);
     }
 
-    await prefs.setString('sync_last_timestamp', remoteTimestamp.toIso8601String());
+    await prefs.setString('sync_last_timestamp', remoteTimestamp.toIso8601String().replaceAll(RegExp(r'Z|\.\d{3,6}Z'), '.000000Z'));
     if (!isBackground) {
       _appState?.notifyDatabaseChanged();
       debugPrint('PullAndMergeDeltas: Notified AppState');
@@ -98,7 +108,10 @@ class SyncService {
 
   Future<void> _pushPendingDeltas({bool isBackground = false}) async {
     final pendingDeltas = await _dbService.getPendingDeltas();
-    if (pendingDeltas.isEmpty) return;
+    if (pendingDeltas.isEmpty) {
+      debugPrint('No pending deltas to push');
+      return;
+    }
 
     final remoteData = await _driveService.pullDeltas(isBackground: isBackground);
     final remoteDeltas = remoteData['deltas'] as List<dynamic>;
@@ -118,22 +131,28 @@ class SyncService {
 
       final hasConflict = remoteDeltas.any((remote) {
         final r = _Delta.fromJson(remote);
-        return r.type != 'delete' &&
-               r.tableName == localDeltaObj.tableName &&
-               (r.entryJson['id'] == localDeltaObj.entryJson['id'] ||
-                (r.entryJson['startTime'] == localDeltaObj.entryJson['startTime'] &&
-                 r.type == 'insert' && localDeltaObj.type == 'insert'));
+        if (r.type == 'delete' || r.tableName != localDeltaObj.tableName) return false;
+        if (localDeltaObj.type == 'insert' && r.type == 'insert') {
+          return r.entryJson['startTime'] == localDeltaObj.entryJson['startTime'];
+        }
+        if (localDeltaObj.type == 'update' && r.entryJson['id'] == localDeltaObj.entryJson['id']) {
+          return r.timestamp.isAfter(localDeltaObj.timestamp);
+        }
+        return false;
       });
 
       if (!hasConflict) {
         allDeltas.add(localDeltaObj.toJson());
         deltaIds.add(localDelta['id'] as int);
+        debugPrint('Added delta to push: type=${localDeltaObj.type}, id=${localDeltaObj.entryJson['id']}');
+      } else {
+        debugPrint('Skipped delta due to conflict: type=${localDeltaObj.type}, id=${localDeltaObj.entryJson['id']}');
       }
     }
 
     final pushData = {
       'deltas': allDeltas,
-      'lastSyncTimestamp': DateTime.now().toUtc().toIso8601String(),
+      'lastSyncTimestamp': DateTime.now().toUtc().toIso8601String().replaceAll(RegExp(r'Z|\.\d{3,6}Z'), '.000000Z'),
       'version': '1.0.0',
     };
 
@@ -156,11 +175,13 @@ class SyncService {
           if (existing == null || delta.timestamp.isAfter(existing.lastModified)) {
             if (delta.type == 'insert') {
               await _dbService.insertSleepEntry(entry);
-              debugPrint('Applied delta: Inserted sleep entry $entry');
+              debugPrint('Applied delta: Inserted sleep entry id=${entry.id}, startTime=${entry.startTime}');
             } else {
               await _dbService.updateSleepEntry(entry);
-              debugPrint('Applied delta: Updated sleep entry $entry');
+              debugPrint('Applied delta: Updated sleep entry id=${entry.id}, startTime=${entry.startTime}');
             }
+          } else {
+            debugPrint('Skipped delta: Existing sleep entry id=${existing?.id}, lastModified=${existing?.lastModified} >= delta.timestamp=${delta.timestamp}');
           }
         } else {
           final entry = FeedingEntry.fromJson(delta.entryJson);
@@ -168,11 +189,13 @@ class SyncService {
           if (existing == null || delta.timestamp.isAfter(existing.lastModified)) {
             if (delta.type == 'insert') {
               await _dbService.insertFeedingEntry(entry);
-              debugPrint('Applied delta: Inserted feeding entry $entry');
+              debugPrint('Applied delta: Inserted feeding entry id=${entry.id}, startTime=${entry.startTime}');
             } else {
               await _dbService.updateFeedingEntry(entry);
-              debugPrint('Applied delta: Updated feeding entry $entry');
+              debugPrint('Applied delta: Updated feeding entry id=${entry.id}, startTime=${entry.startTime}');
             }
+          } else {
+            debugPrint('Skipped delta: Existing feeding entry id=${existing?.id}, lastModified=${existing?.lastModified} >= delta.timestamp=${delta.timestamp}');
           }
         }
         break;
@@ -195,13 +218,14 @@ class SyncService {
 
   Future<bool> _hasPendingPush() async {
     final deltas = await _dbService.getPendingDeltas();
+    debugPrint('Pending deltas count: ${deltas.length}');
     return deltas.isNotEmpty;
   }
 
   Future<int> logSleepInsert(SleepEntry entry) async {
     final userEmail = await currentUserEmail ?? 'local';
     final updatedEntry = entry.copyWith(
-      lastModified: entry.lastModified ?? DateTime.now(),
+      lastModified: DateTime.now().toUtc(),
       modifiedBy: userEmail,
     );
     final id = await _dbService.insertSleepEntry(updatedEntry);
@@ -221,7 +245,7 @@ class SyncService {
   Future<void> logSleepUpdate(SleepEntry entry) async {
     final userEmail = await currentUserEmail ?? 'local';
     final updatedEntry = entry.copyWith(
-      lastModified: entry.lastModified ?? DateTime.now(),
+      lastModified: DateTime.now().toUtc(),
       modifiedBy: userEmail,
     );
     await _dbService.updateSleepEntry(updatedEntry);
@@ -255,7 +279,7 @@ class SyncService {
     debugPrint("logFeedingInsert");
     final userEmail = await currentUserEmail ?? 'local';
     final updatedEntry = entry.copyWith(
-      lastModified: entry.lastModified ?? DateTime.now(),
+      lastModified: DateTime.now().toUtc(),
       modifiedBy: userEmail,
     );
     final id = await _dbService.insertFeedingEntry(updatedEntry);
@@ -277,7 +301,7 @@ class SyncService {
     debugPrint("logFeedingUpdate");
     final userEmail = await currentUserEmail ?? 'local';
     final updatedEntry = entry.copyWith(
-      lastModified: entry.lastModified ?? DateTime.now(),
+      lastModified: DateTime.now().toUtc(),
       modifiedBy: userEmail,
     );
     await _dbService.updateFeedingEntry(updatedEntry);
@@ -341,7 +365,7 @@ class _Delta {
       'type': type,
       'table_name': tableName,
       'entry_json': entryJson,
-      'timestamp': timestamp.toIso8601String(),
+      'timestamp': timestamp.toIso8601String().replaceAll(RegExp(r'Z|\.\d{3,6}Z'), '.000000'),
       'modified_by': modifiedBy,
     };
   }

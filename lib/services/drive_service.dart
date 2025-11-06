@@ -1,4 +1,3 @@
-import 'package:flutter/material.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:extension_google_sign_in_as_googleapis_auth/extension_google_sign_in_as_googleapis_auth.dart';
@@ -15,7 +14,7 @@ class DriveService {
   bool get isSigningIn => _isSigningIn;
 
   static const List<String> scopes = <String>[
-    drive.DriveApi.driveScope,
+    drive.DriveApi.driveScope, // 'https://www.googleapis.com/auth/drive'
   ];
 
   static const String _folderId = '1ztuF2eVMtO4acD3Y-omQves64qUEf9Pj';
@@ -54,7 +53,7 @@ class DriveService {
         _driveApi = drive.DriveApi(authClient);
         return _currentUser;
       } catch (e) {
-        debugPrint('DriveService: Credential validation failed: $e');
+        print('DriveService: Credential validation failed: $e');
         _currentUser = null;
         _authorization = null;
         _driveApi = null;
@@ -63,7 +62,7 @@ class DriveService {
 
     if (isBackground) {
       if (!(await _googleSignIn!.supportsAuthenticate()) || await _googleSignIn!.authorizationRequiresUserInteraction()) {
-        debugPrint('DriveService: Background authentication requires UI, skipping');
+        print('DriveService: Background authentication requires UI or is unsupported, skipping');
         return null;
       }
       try {
@@ -78,10 +77,10 @@ class DriveService {
             return user;
           }
         }
-        debugPrint('DriveService: No valid user or authorization in background');
+        print('DriveService: No valid user or authorization in background');
         return null;
       } catch (e) {
-        debugPrint('DriveService: Background authentication failed: $e');
+        print('DriveService: Background authentication failed: $e');
         return null;
       }
     }
@@ -90,9 +89,14 @@ class DriveService {
 
     _signInCompleter = Completer();
     try {
-      final user = await _googleSignIn!.authenticate();
+      // Try lightweight authentication first
+      GoogleSignInAccount? user = await _googleSignIn!.attemptLightweightAuthentication(reportAllExceptions: false);
       if (user != null && (accountId == null || user.id == accountId)) {
-        final authorization = await user.authorizationClient.authorizationForScopes(scopes);
+        var authorization = await user.authorizationClient.authorizationForScopes(scopes);
+        if (authorization == null) {
+          print('DriveService: Initial authorizationForScopes failed, attempting authorizeScopes');
+          authorization = await user.authorizationClient.authorizeScopes(scopes);
+        }
         if (authorization != null) {
           _currentUser = user;
           _authorization = authorization;
@@ -100,14 +104,40 @@ class DriveService {
           _driveApi = drive.DriveApi(authClient);
           await prefs.setBool('sync_drive_authorized', true);
           await prefs.setString('google_account_id', user.id);
-        } else {
-          throw Exception('Authorization failed');
+          _signInCompleter!.complete(user);
+          return user;
         }
       }
+
+      // If lightweight auth fails or user doesn't match, force full authentication
+      await _googleSignIn!.signOut(); // Clear cached credentials to force consent screen
+      user = await _googleSignIn!.authenticate();
+      if (user == null) {
+        throw Exception('Google Sign-In failed: User cancelled or no user returned');
+      }
+      if (accountId != null && user.id != accountId) {
+        throw Exception('Signed-in user does not match stored account ID');
+      }
+
+      var authorization = await user.authorizationClient.authorizationForScopes(scopes);
+      if (authorization == null) {
+        print('DriveService: Initial authorizationForScopes failed, attempting authorizeScopes');
+        authorization = await user.authorizationClient.authorizeScopes(scopes);
+      }
+      if (authorization == null) {
+        throw Exception('Authorization failed: Unable to obtain credentials for Drive scope');
+      }
+
+      _currentUser = user;
+      _authorization = authorization;
+      final authClient = authorization.authClient(scopes: scopes);
+      _driveApi = drive.DriveApi(authClient);
+      await prefs.setBool('sync_drive_authorized', true);
+      await prefs.setString('google_account_id', user.id);
       _signInCompleter!.complete(user);
       return user;
     } catch (e) {
-      debugPrint("DriveService: Authentication failed: $e");
+      print('DriveService: Ensure sign-in failed: $e');
       _signInCompleter!.complete(null);
       return null;
     } finally {
@@ -123,19 +153,25 @@ class DriveService {
       case GoogleSignInAuthenticationEventSignIn():
         if (event.user != null && (accountId == null || event.user!.id == accountId)) {
           _currentUser = event.user;
-          final authorization = await _currentUser!.authorizationClient.authorizationForScopes(scopes);
+          var authorization = await _currentUser!.authorizationClient.authorizationForScopes(scopes);
+          if (authorization == null) {
+            print('DriveService: Initial authorizationForScopes failed in event, attempting authorizeScopes');
+            authorization = await _currentUser!.authorizationClient.authorizeScopes(scopes);
+          }
           if (authorization != null) {
             _authorization = authorization;
             final authClient = authorization.authClient(scopes: scopes);
             _driveApi = drive.DriveApi(authClient);
             await prefs.setBool('sync_drive_authorized', true);
             await prefs.setString('google_account_id', _currentUser!.id);
-            debugPrint('DriveService: Authentication event - signed in');
+            print('DriveService: Authentication event - signed in');
           } else {
             _currentUser = null;
             _authorization = null;
             _driveApi = null;
-            debugPrint('DriveService: Authorization failed during sign-in event');
+            await prefs.setBool('sync_drive_authorized', false);
+            await prefs.remove('google_account_id');
+            print('DriveService: Authorization failed during sign-in event');
           }
         }
         break;
@@ -145,25 +181,29 @@ class DriveService {
         _driveApi = null;
         await prefs.setBool('sync_drive_authorized', false);
         await prefs.remove('google_account_id');
-        debugPrint('DriveService: Authentication event - signed out');
+        print('DriveService: Authentication event - signed out');
         break;
     }
   }
 
   Future<void> _handleAuthenticationError(Object e) async {
-    debugPrint("DriveService: Authentication error: $e");
+    _currentUser = null;
+    _authorization = null;
+    _driveApi = null;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('sync_drive_authorized', false);
+    await prefs.remove('google_account_id');
+    print('DriveService: Authentication error: $e');
   }
 
   Future<bool> get isAuthorized async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool('sync_drive_authorized') ?? false;
+    final user = await _ensureSignedIn();
+    return user != null;
   }
 
   Future<String?> get currentUserEmail async {
-    final prefs = await SharedPreferences.getInstance();
-    if (!(prefs.getBool('sync_drive_authorized') ?? false)) return null;
-    if (_currentUser != null) return _currentUser!.email;
-    return null;
+    final user = await _ensureSignedIn();
+    return user?.email;
   }
 
   Future<void> signIn() async {
@@ -172,11 +212,21 @@ class DriveService {
     await _initializeGoogleSignIn();
 
     try {
+      // Clear cached credentials to force OAuth consent screen
+      await _googleSignIn!.signOut();
       _currentUser = await _googleSignIn!.authenticate();
-      if (_currentUser == null) throw Exception('Google Sign-In failed');
+      if (_currentUser == null) {
+        throw Exception('Google Sign-In failed: User cancelled or no user returned');
+      }
 
-      final authorization = await _currentUser!.authorizationClient.authorizationForScopes(scopes);
-      if (authorization == null) throw Exception('Authorization failed');
+      var authorization = await _currentUser!.authorizationClient.authorizationForScopes(scopes);
+      if (authorization == null) {
+        print('DriveService: Initial authorizationForScopes failed, attempting authorizeScopes');
+        authorization = await _currentUser!.authorizationClient.authorizeScopes(scopes);
+      }
+      if (authorization == null) {
+        throw Exception('Authorization failed: Unable to obtain credentials for Drive scope');
+      }
 
       _authorization = authorization;
       final authClient = authorization.authClient(scopes: scopes);
@@ -184,12 +234,22 @@ class DriveService {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('sync_drive_authorized', true);
       await prefs.setString('google_account_id', _currentUser!.id);
-      debugPrint('DriveService: Signed in successfully');
+      print('DriveService: Signed in successfully');
+    } on GoogleSignInException catch (e) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('sync_drive_authorized', false);
+      await prefs.remove('google_account_id');
+      if (e.code == GoogleSignInExceptionCode.canceled) {
+        print('DriveService: Sign-in canceled by user or system: $e');
+      } else {
+        print('DriveService: Google Sign-In configuration error: $e');
+      }
+      rethrow;
     } catch (e) {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('sync_drive_authorized', false);
       await prefs.remove('google_account_id');
-      debugPrint("DriveService: Sign-in failed: $e");
+      print('DriveService: Sign-in failed: $e');
       rethrow;
     } finally {
       _isSigningIn = false;
@@ -198,14 +258,14 @@ class DriveService {
 
   Future<void> signOut() async {
     await _initializeGoogleSignIn();
-    await _googleSignIn!.disconnect();
+    await _googleSignIn!.signOut();
     _currentUser = null;
     _authorization = null;
     _driveApi = null;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('sync_drive_authorized', false);
     await prefs.remove('google_account_id');
-    debugPrint('DriveService: Signed out');
+    print('DriveService: Signed out');
   }
 
   Future<Map<String, dynamic>> pullDeltas({bool isBackground = false}) async {
@@ -222,7 +282,7 @@ class DriveService {
 
     final user = await _ensureSignedIn(isBackground: isBackground);
     if (user == null || _authorization == null) {
-      debugPrint('DriveService: No valid user or authorization for pullDeltas');
+      print('DriveService: No valid user or authorization for pullDeltas');
       if (isBackground) {
         return {
           'deltas': [],
@@ -255,7 +315,7 @@ class DriveService {
 
       return json.decode(jsonString);
     } catch (e) {
-      debugPrint('DriveService: Pull deltas failed: $e');
+      print('DriveService: Pull deltas failed: $e');
       if (isBackground) {
         return {
           'deltas': [],
@@ -275,7 +335,7 @@ class DriveService {
 
     final user = await _ensureSignedIn(isBackground: isBackground);
     if (user == null || _authorization == null) {
-      debugPrint('DriveService: No valid user or authorization for pushDeltas');
+      print('DriveService: No valid user or authorization for pushDeltas');
       if (isBackground) return;
       throw Exception('No valid user or authorization');
     }
@@ -303,7 +363,7 @@ class DriveService {
         );
       }
     } catch (e) {
-      debugPrint('DriveService: Push deltas failed: $e');
+      print('DriveService: Push deltas failed: $e');
       if (isBackground) return;
       rethrow;
     }
@@ -317,7 +377,7 @@ class DriveService {
 
     final user = await _ensureSignedIn(isBackground: isBackground);
     if (user == null || _authorization == null) {
-      debugPrint('DriveService: No valid user or authorization for checkFolderAccess');
+      print('DriveService: No valid user or authorization for checkFolderAccess');
       if (isBackground) return;
       throw Exception('No valid user or authorization');
     }
@@ -331,7 +391,7 @@ class DriveService {
         throw Exception('Target is not a folder');
       }
     } catch (e) {
-      debugPrint("DriveService: Drive folder access error: $e");
+      print('DriveService: Drive folder access error: $e');
       if (isBackground) return;
       rethrow;
     }
