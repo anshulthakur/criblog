@@ -11,14 +11,9 @@ import 'widget_service.dart';
 class SyncService {
   final DriveService _driveService = DriveService();
   final DatabaseService _dbService = DatabaseService();
-  bool _isSyncing = false; // Prevent concurrent syncs
+  bool _isSyncing = false;
 
   Future<bool> get isAuthorized async {
-    debugPrint('Check authorization');
-    final prefs = await SharedPreferences.getInstance();
-    final authorized = prefs.getBool('sync_drive_authorized') ?? false;
-    if (!authorized) return false;
-    debugPrint('Auth set in prefs, check drive');
     return await _driveService.isAuthorized;
   }
 
@@ -36,17 +31,11 @@ class SyncService {
     }
 
     final prefs = await SharedPreferences.getInstance();
-    final authorized = prefs.getBool('sync_drive_authorized') ?? false;
+    final authorized = await isAuthorized;
     if (!authorized) {
-      debugPrint('Sync skipped: Drive not authorized in SharedPreferences');
-      if (isBackground) return;
-      throw Exception('Drive not authorized');
-    }
-
-    if (!await isAuthorized) {
       debugPrint('Sync skipped: Drive not authorized');
       if (isBackground) return;
-      throw Exception('Drive not authorized');
+      throw Exception('Please authorize Google Drive in Settings');
     }
 
     _isSyncing = true;
@@ -74,22 +63,6 @@ class SyncService {
     } finally {
       _isSyncing = false;
     }
-  }
-
-  Future<void> scheduleSync(int minutes) async {
-    if (minutes <= 0) return;
-    await Workmanager().registerPeriodicTask(
-      'auto-sync-task',
-      'auto-sync',
-      frequency: Duration(minutes: minutes),
-      constraints: Constraints(
-        networkType: NetworkType.connected,
-      ),
-    );
-  }
-
-  Future<void> cancelSync() async {
-    await Workmanager().cancelAll();
   }
 
   Future<void> _pullAndMergeDeltas({bool isBackground = false}) async {
@@ -195,34 +168,12 @@ class SyncService {
   }
 
   Future<bool> _hasPendingPull(DateTime lastSyncTimestamp) async {
-    final interval = Duration(minutes: await _getAutoSyncInterval());
-    return DateTime.now().subtract(interval).isAfter(lastSyncTimestamp);
+    return DateTime.now().subtract(const Duration(minutes: 180)).isAfter(lastSyncTimestamp);
   }
 
   Future<bool> _hasPendingPush() async {
     final deltas = await _dbService.getPendingDeltas();
     return deltas.isNotEmpty;
-  }
-
-  Future<int> _getAutoSyncInterval() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getInt('sync_auto_interval') ?? 180;
-  }
-
-  Future<void> _triggerBackgroundSync() async {
-    if (await isAuthorized && !_isSyncing) {
-      await Workmanager().registerOneOffTask(
-        'immediate-sync-${DateTime.now().millisecondsSinceEpoch}',
-        'immediate-sync',
-        constraints: Constraints(
-          networkType: NetworkType.connected,
-        ),
-        existingWorkPolicy: ExistingWorkPolicy.append,
-      );
-      debugPrint('Scheduled immediate background sync');
-    } else {
-      debugPrint('Background sync not triggered: authorized=${await isAuthorized}, isSyncing=$_isSyncing');
-    }
   }
 
   Future<int> logSleepInsert(SleepEntry entry) async {
@@ -232,7 +183,13 @@ class SyncService {
       modifiedBy: userEmail,
     );
     final id = await _dbService.insertSleepEntry(updatedEntry);
-    await _triggerBackgroundSync();
+    if (await isAuthorized) {
+      try {
+        await sync();
+      } catch (e) {
+        debugPrint('Sync after sleep insert failed: $e');
+      }
+    }
     return id;
   }
 
@@ -243,12 +200,24 @@ class SyncService {
       modifiedBy: userEmail,
     );
     await _dbService.updateSleepEntry(updatedEntry);
-    await _triggerBackgroundSync();
+    if (await isAuthorized) {
+      try {
+        await sync();
+      } catch (e) {
+        debugPrint('Sync after sleep update failed: $e');
+      }
+    }
   }
 
   Future<void> logSleepDelete(int id) async {
     await _dbService.deleteSleepEntry(id);
-    await _triggerBackgroundSync();
+    if (await isAuthorized) {
+      try {
+        await sync();
+      } catch (e) {
+        debugPrint('Sync after sleep delete failed: $e');
+      }
+    }
   }
 
   Future<int> logFeedingInsert(FeedingEntry entry) async {
@@ -259,8 +228,14 @@ class SyncService {
       modifiedBy: userEmail,
     );
     final id = await _dbService.insertFeedingEntry(updatedEntry);
-    await _triggerBackgroundSync();
-    await WidgetService.syncAppToWidget(triggerUpdate: false);
+    if (await isAuthorized) {
+      try {
+        await sync();
+        await WidgetService.syncAppToWidget(triggerUpdate: false);
+      } catch (e) {
+        debugPrint('Sync after feeding insert failed: $e');
+      }
+    }
     return id;
   }
 
@@ -272,15 +247,27 @@ class SyncService {
       modifiedBy: userEmail,
     );
     await _dbService.updateFeedingEntry(updatedEntry);
-    await _triggerBackgroundSync();
-    await WidgetService.syncAppToWidget(triggerUpdate: false);
+    if (await isAuthorized) {
+      try {
+        await sync();
+        await WidgetService.syncAppToWidget(triggerUpdate: false);
+      } catch (e) {
+        debugPrint('Sync after feeding update failed: $e');
+      }
+    }
   }
 
   Future<void> logFeedingDelete(int id) async {
     debugPrint("logFeedingDelete");
     await _dbService.deleteFeedingEntry(id);
-    await _triggerBackgroundSync();
-    await WidgetService.syncAppToWidget(triggerUpdate: false);
+    if (await isAuthorized) {
+      try {
+        await sync();
+        await WidgetService.syncAppToWidget(triggerUpdate: false);
+      } catch (e) {
+        debugPrint('Sync after feeding delete failed: $e');
+      }
+    }
   }
 }
 

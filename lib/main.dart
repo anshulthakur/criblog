@@ -22,19 +22,16 @@ void callbackDispatcher() {
     try {
       switch (task) {
         case 'immediate-sync':
-        case 'auto-sync':
           final syncService = SyncService();
           await syncService.sync(isBackground: true);
           debugPrint('Sync task completed: $task');
           break;
         case 'widget-feeding-toggle':
           await WidgetService.handleFeedingFromWidget();
-          //await WidgetService.syncAppToWidget();
           debugPrint('Feeding toggle completed');
           break;
         case 'widget-sleep-toggle':
           await WidgetService.handleSleepFromWidget();
-          //await WidgetService.syncAppToWidget();
           debugPrint('Sleep toggle completed');
           break;
         default:
@@ -59,7 +56,7 @@ void main() async {
   // Init WorkManager
   await Workmanager().initialize(
     callbackDispatcher,
-    isInDebugMode: true, // Enable debug logs
+    isInDebugMode: true,
   );
 
   // --- MethodChannel: receives actions from Kotlin WidgetWorker ---
@@ -81,10 +78,7 @@ void main() async {
           debugPrint('Unknown action type: $type');
           return null;
         }
-        // Trigger widget UI update after action
-        //await WidgetService.syncAppToWidget();
-        //debugPrint('Widget synced after MethodChannel action');
-        return result; // Return state to MethodChannel
+        return result;
       } else {
         debugPrint('Unknown MethodChannel method: ${call.method}');
         return null;
@@ -94,33 +88,6 @@ void main() async {
       rethrow;
     }
   });
-  
-  // Schedule auto-sync
-  final syncService = SyncService();
-  final prefs = await SharedPreferences.getInstance();
-  final authorized = await syncService.isAuthorized;
-  final interval = prefs.getInt('sync_auto_interval') ?? 180;
-  if (authorized && interval > 0) {
-    Workmanager().registerPeriodicTask(
-      'auto-sync-task',
-      'auto-sync',
-      frequency: Duration(minutes: interval),
-      constraints: Constraints(
-        networkType: NetworkType.connected,
-      ),
-    );
-  }
-  
-  /*
-  try {
-    await HomeWidget.registerInteractivityCallback((uri) async {
-      debugPrint('Widget tapped: $uri');
-      return;
-    });
-  } catch (e, stack) {
-    debugPrint('HomeWidget callback failed: $e');
-  }
-  */
 
   // Sync app state → widget on launch
   await WidgetService.syncAppToWidget();
@@ -145,7 +112,6 @@ class CribLogApp extends StatelessWidget {
         '/input': (_) => const RootScaffold(child: InputScreen()),
       },
       onGenerateRoute: (settings) {
-        // Fallback for invalid routes
         return MaterialPageRoute(
           builder: (_) => const RootScaffold(child: HomeScreen()),
         );
@@ -164,15 +130,7 @@ class RootScaffold extends StatefulWidget {
 
 class _RootScaffoldState extends State<RootScaffold> {
   final syncService = SyncService();
-  final driveService = DriveService();
   final List<String> _routeHistory = ['/'];
-  Timer? _refreshTimer;
-
-  @override
-  void initState() {
-    super.initState();
-    _startTokenRefresh();
-  }
 
   @override
   void didChangeDependencies() {
@@ -180,25 +138,6 @@ class _RootScaffoldState extends State<RootScaffold> {
     final currentRoute = ModalRoute.of(context)?.settings.name;
     if (currentRoute != null && currentRoute != _routeHistory.last) {
       _routeHistory.add(currentRoute);
-    }
-  }
-
-  @override
-  void dispose() {
-    _refreshTimer?.cancel();
-    super.dispose();
-  }
-
-  Future<void> _startTokenRefresh() async {
-    if (await syncService.isAuthorized) {
-      await driveService.refreshToken();
-      _refreshTimer = Timer.periodic(const Duration(minutes: 30), (_) async {
-        if (await syncService.isAuthorized) {
-          await driveService.refreshToken();
-        } else {
-          _refreshTimer?.cancel();
-        }
-      });
     }
   }
 
@@ -215,11 +154,19 @@ class _RootScaffoldState extends State<RootScaffold> {
 
   Future<void> _sync() async {
     try {
-      await syncService.sync(forcePull: true);
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Synced successfully')),
-        );
+      if (await syncService.isDriveAuthorized) {
+        await syncService.sync();
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Synced successfully')),
+          );
+        }
+      } else {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Please authorize Google Drive in Settings')),
+          );
+        }
       }
     } catch (e) {
       if (context.mounted) {
@@ -236,18 +183,15 @@ class _RootScaffoldState extends State<RootScaffold> {
       onWillPop: () async {
         final routeName = ModalRoute.of(context)?.settings.name;
         if (routeName == '/') {
-          // Home screen → exit app
           SystemNavigator.pop();
           return true;
         } else if (routeName == '/settings') {
-          // Settings → pop to previous screen
           if (_routeHistory.length > 1) {
             _routeHistory.removeLast();
             Navigator.pop(context);
             return false;
           }
         } else {
-          // Entries, Input → go to Home
           _routeHistory.clear();
           _routeHistory.add('/');
           Navigator.pushReplacementNamed(context, '/');

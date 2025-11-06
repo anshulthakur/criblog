@@ -4,10 +4,7 @@ import '../services/sync_service.dart';
 import '../models/sleep_entry.dart';
 import '../models/feeding_entry.dart';
 
-/// Mix-in that can be added to any State<T> where T extends StatefulWidget.
-/// It contains **all** the logic for starting / ending sleep & feeding.
 mixin EntryController<T extends StatefulWidget> on State<T> {
-  // ------------------------------------------------------------------ state
   bool _isSleepOngoing = false;
   bool _isFeedingOngoing = false;
   SleepEntry? _lastSleep;
@@ -16,18 +13,15 @@ mixin EntryController<T extends StatefulWidget> on State<T> {
   final _syncService = SyncService();
   final _dbService = DatabaseService();
 
-  // ------------------------------------------------------------------ getters
   bool get isSleepOngoing => _isSleepOngoing;
   bool get isFeedingOngoing => _isFeedingOngoing;
   FeedingSource get selectedSource => _selectedSource;
   SleepEntry? get lastSleep => _lastSleep;
   FeedingEntry? get lastFeeding => _lastFeeding;
 
-  // ------------------------------------------------------------------ init
   @mustCallSuper
   Future<void> initEntryState() async => _refreshStatus();
 
-  // ------------------------------------------------------------------ refresh
   Future<void> refreshEntryState() async => _refreshStatus();
 
   Future<void> _refreshStatus() async {
@@ -44,7 +38,6 @@ mixin EntryController<T extends StatefulWidget> on State<T> {
     });
   }
 
-  // ------------------------------------------------------------------ sleep
   Future<void> toggleSleep() async {
     final now = DateTime.now();
     if (_isSleepOngoing) {
@@ -55,8 +48,12 @@ mixin EntryController<T extends StatefulWidget> on State<T> {
         lastModified: now,
         modifiedBy: await _syncService.currentUserEmail ?? 'local',
       );
-      await _syncService.logSleepUpdate(updated);
-      _snack('Sleep ended at ${_fmt(now)}');
+      try {
+        await _syncService.logSleepUpdate(updated);
+        _snack('Sleep ended at ${_fmt(now)}');
+      } catch (e) {
+        _snack('Sleep ended, but sync failed: $e');
+      }
       setState(() => _isSleepOngoing = false);
     } else {
       final newEntry = SleepEntry(
@@ -64,18 +61,21 @@ mixin EntryController<T extends StatefulWidget> on State<T> {
         lastModified: now,
         modifiedBy: await _syncService.currentUserEmail ?? 'local',
       );
-      final insertedId = await _syncService.logSleepInsert(newEntry);
-      final entryWithId = newEntry.copyWith(id: insertedId);
-      _snack('Sleep started at ${_fmt(now)}');
-      setState(() {
-        _isSleepOngoing = true;
-        _lastSleep = entryWithId;
-      });
+      try {
+        final insertedId = await _syncService.logSleepInsert(newEntry);
+        final entryWithId = newEntry.copyWith(id: insertedId);
+        _snack('Sleep started at ${_fmt(now)}');
+        setState(() {
+          _isSleepOngoing = true;
+          _lastSleep = entryWithId;
+        });
+      } catch (e) {
+        _snack('Sleep started, but sync failed: $e');
+      }
     }
     await _refreshStatus();
   }
 
-  // ------------------------------------------------------------------ feeding
   Future<void> toggleFeeding() async {
     final now = DateTime.now();
     if (_isFeedingOngoing) {
@@ -87,8 +87,12 @@ mixin EntryController<T extends StatefulWidget> on State<T> {
         lastModified: now,
         modifiedBy: await _syncService.currentUserEmail ?? 'local',
       );
-      await _syncService.logFeedingUpdate(updated);
-      _snack('Feeding ended at ${_fmt(now)}');
+      try {
+        await _syncService.logFeedingUpdate(updated);
+        _snack('Feeding ended at ${_fmt(now)}');
+      } catch (e) {
+        _snack('Feeding ended, but sync failed: $e');
+      }
     } else {
       final newEntry = FeedingEntry(
         startTime: now,
@@ -97,26 +101,28 @@ mixin EntryController<T extends StatefulWidget> on State<T> {
         lastModified: now,
         modifiedBy: await _syncService.currentUserEmail ?? 'local',
       );
-      final insertedId = await _syncService.logFeedingInsert(newEntry);
-      final entryWithId = newEntry.copyWith(id: insertedId);
-      _snack('Feeding (${_srcLabel(_selectedSource)}) started at ${_fmt(now)}');
-      setState(() {
-        _isFeedingOngoing = true;
-        _lastFeeding = entryWithId;
-      });
+      try {
+        final insertedId = await _syncService.logFeedingInsert(newEntry);
+        final entryWithId = newEntry.copyWith(id: insertedId);
+        _snack('Feeding (${_srcLabel(_selectedSource)}) started at ${_fmt(now)}');
+        setState(() {
+          _isFeedingOngoing = true;
+          _lastFeeding = entryWithId;
+        });
+      } catch (e) {
+        _snack('Feeding started, but sync failed: $e');
+      }
     }
     await _refreshStatus();
   }
 
-  // ------------------------------------------------------------------ source
   void setFeedingSource(FeedingSource source) => setState(() => _selectedSource = source);
 
-  // ------------------------------------------------------------------ helpers
   void _snack(String msg) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
-  String _fmt(DateTime d) => d.toString().substring(11, 16); // HH:MM
+  String _fmt(DateTime d) => d.toString().substring(11, 16);
   String _srcLabel(FeedingSource s) => s == FeedingSource.breast ? 'Breast' : 'Expressed';
 }

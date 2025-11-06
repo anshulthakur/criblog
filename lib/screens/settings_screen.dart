@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:workmanager/workmanager.dart';
 import '../services/drive_service.dart';
 import '../services/sync_service.dart';
 
@@ -14,89 +13,7 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   final SyncService _syncService = SyncService();
   final DriveService _driveService = DriveService();
-  int _autoSyncInterval = 180; // minutes (3 hours)
   bool _isSigningIn = false;
-
-  final List<Map<String, dynamic>> _intervals = [
-    {'label': '15 minutes', 'minutes': 15},
-    {'label': '30 minutes', 'minutes': 30},
-    {'label': '1 hour', 'minutes': 60},
-    {'label': '3 hours', 'minutes': 180},
-    {'label': '12 hours', 'minutes': 720},
-    {'label': '1 day', 'minutes': 1440},
-    {'label': '1 week', 'minutes': 10080},
-  ];
-  int _selectedInterval = 3;
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _loadConfig());
-  }
-
-  Future<void> _loadConfig() async {
-    final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      _autoSyncInterval = prefs.getInt('sync_auto_interval') ?? 180;
-      _selectedInterval = _intervals.indexWhere((i) => i['minutes'] == _autoSyncInterval);
-      if (_selectedInterval == -1) _selectedInterval = 3;
-    });
-  }
-
-  Future<void> _authorize() async {
-    setState(() => _isSigningIn = true);
-    try {
-      await _driveService.signIn();
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Drive authorized successfully')),
-        );
-      }
-      await _updateAutoSync();
-      setState(() {});
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Authorization failed: $e')),
-        );
-      }
-    }
-    setState(() => _isSigningIn = false);
-  }
-
-  Future<void> _signOut() async {
-    setState(() => _isSigningIn = true);
-    try {
-      await _driveService.signOut();
-      await _syncService.cancelSync();
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Signed out from Google Drive')),
-        );
-      }
-      setState(() {});
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Sign out failed: $e')),
-        );
-      }
-    }
-    setState(() => _isSigningIn = false);
-  }
-
-  Future<void> _updateAutoSync() async {
-    final minutes = _intervals[_selectedInterval]['minutes'] as int;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt('sync_auto_interval', minutes);
-    setState(() => _autoSyncInterval = minutes);
-
-    if (await _syncService.isDriveAuthorized && minutes > 0) {
-      await _syncService.scheduleSync(minutes);
-    } else {
-      await _syncService.cancelSync();
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -108,7 +25,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             title: const Text('Google Drive Sync'),
             subtitle: const Text('Backup and sync across devices'),
             trailing: FutureBuilder<bool>(
-              future: _syncService.isDriveAuthorized,
+              future: _syncService.isAuthorized,
               builder: (context, snapshot) {
                 final isAuthorized = snapshot.data ?? false;
                 return ElevatedButton(
@@ -120,7 +37,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
         ),
         FutureBuilder<bool>(
-          future: _syncService.isDriveAuthorized,
+          future: _syncService.isAuthorized,
           builder: (context, snapshot) {
             final isAuthorized = snapshot.data ?? false;
             return Visibility(
@@ -139,7 +56,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           },
         ),
         FutureBuilder<bool>(
-          future: _syncService.isDriveAuthorized,
+          future: _syncService.isAuthorized,
           builder: (context, snapshot) {
             final isAuthorized = snapshot.data ?? false;
             return Visibility(
@@ -154,49 +71,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             );
           },
-        ),
-        const Divider(),
-        Card(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              ListTile(
-                title: const Text('Auto-Sync Interval'),
-                subtitle: const Text('Sync in background'),
-                trailing: DropdownButton<int>(
-                  value: _selectedInterval,
-                  items: _intervals.asMap().entries.map((entry) {
-                    return DropdownMenuItem(
-                      value: entry.key,
-                      child: Text(entry.value['label']),
-                    );
-                  }).toList(),
-                  onChanged: _isSigningIn
-                      ? null
-                      : (value) {
-                          setState(() => _selectedInterval = value!);
-                          _updateAutoSync();
-                        },
-                ),
-              ),
-              FutureBuilder<bool>(
-                future: _syncService.isDriveAuthorized,
-                builder: (context, snapshot) {
-                  final isAuthorized = snapshot.data ?? false;
-                  return Visibility(
-                    visible: isAuthorized,
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: Text(
-                        'Next sync: ${_intervals[_selectedInterval]['label']}',
-                        style: TextStyle(color: Colors.grey[600], fontSize: 12),
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ],
-          ),
         ),
         const Divider(),
         FutureBuilder<SharedPreferences>(
@@ -223,5 +97,45 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
       ],
     );
+  }
+
+  Future<void> _authorize() async {
+    setState(() => _isSigningIn = true);
+    try {
+      await _driveService.signIn();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Drive authorized successfully')),
+        );
+      }
+      setState(() {});
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Authorization failed: $e')),
+        );
+      }
+    }
+    setState(() => _isSigningIn = false);
+  }
+
+  Future<void> _signOut() async {
+    setState(() => _isSigningIn = true);
+    try {
+      await _driveService.signOut();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Signed out from Google Drive')),
+        );
+      }
+      setState(() {});
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Sign out failed: $e')),
+        );
+      }
+    }
+    setState(() => _isSigningIn = false);
   }
 }

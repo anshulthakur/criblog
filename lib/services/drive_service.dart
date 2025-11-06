@@ -2,14 +2,12 @@ import 'package:flutter/material.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:extension_google_sign_in_as_googleapis_auth/extension_google_sign_in_as_googleapis_auth.dart';
-import 'package:flutter/foundation.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:googleapis/drive/v3.dart' as drive;
 import 'package:googleapis_auth/googleapis_auth.dart' as auth;
 import 'package:shared_preferences/shared_preferences.dart';
 
 class DriveService {
-  // Singleton class
   static final DriveService _instance = DriveService._internal();
   DriveService._internal();
   factory DriveService() => _instance;
@@ -35,23 +33,22 @@ class DriveService {
   String get folderId => _folderId;
 
   Future<void> _initializeGoogleSignIn() async {
-    if (_isInitialized) {
-      return;
-    }
+    if (_isInitialized) return;
     _googleSignIn = GoogleSignIn.instance;
     await _googleSignIn!.initialize(
       clientId: null,
       serverClientId: _serverClientId,
     );
     _googleSignIn!.authenticationEvents.listen(_handleAuthenticationEvent, onError: _handleAuthenticationError);
-    await _googleSignIn!.attemptLightweightAuthentication();
     _isInitialized = true;
   }
 
   Future<GoogleSignInAccount?> _ensureSignedIn({bool isBackground = false}) async {
     await _initializeGoogleSignIn();
+    final prefs = await SharedPreferences.getInstance();
+    final accountId = prefs.getString('google_account_id');
+
     if (_currentUser != null && _authorization != null) {
-      // Validate existing credentials
       try {
         final authClient = _authorization!.authClient(scopes: scopes);
         _driveApi = drive.DriveApi(authClient);
@@ -61,15 +58,17 @@ class DriveService {
         _currentUser = null;
         _authorization = null;
         _driveApi = null;
-        return null;
       }
     }
 
     if (isBackground) {
-      // Background tasks: attempt silent sign-in
+      if (!(await _googleSignIn!.supportsAuthenticate()) || await _googleSignIn!.authorizationRequiresUserInteraction()) {
+        debugPrint('DriveService: Background authentication requires UI, skipping');
+        return null;
+      }
       try {
         final user = await _googleSignIn!.attemptLightweightAuthentication(reportAllExceptions: false);
-        if (user != null) {
+        if (user != null && (accountId == null || user.id == accountId)) {
           final authorization = await user.authorizationClient.authorizationForScopes(scopes);
           if (authorization != null) {
             _currentUser = user;
@@ -87,21 +86,20 @@ class DriveService {
       }
     }
 
-    // Foreground: attempt interactive sign-in
     if (_signInCompleter != null) return _signInCompleter!.future;
 
     _signInCompleter = Completer();
     try {
       final user = await _googleSignIn!.authenticate();
-      if (user != null) {
+      if (user != null && (accountId == null || user.id == accountId)) {
         final authorization = await user.authorizationClient.authorizationForScopes(scopes);
         if (authorization != null) {
           _currentUser = user;
           _authorization = authorization;
           final authClient = authorization.authClient(scopes: scopes);
           _driveApi = drive.DriveApi(authClient);
-          final prefs = await SharedPreferences.getInstance();
           await prefs.setBool('sync_drive_authorized', true);
+          await prefs.setString('google_account_id', user.id);
         } else {
           throw Exception('Authorization failed');
         }
@@ -118,17 +116,20 @@ class DriveService {
   }
 
   Future<void> _handleAuthenticationEvent(GoogleSignInAuthenticationEvent event) async {
+    final prefs = await SharedPreferences.getInstance();
+    final accountId = prefs.getString('google_account_id');
+
     switch (event) {
       case GoogleSignInAuthenticationEventSignIn():
-        _currentUser = event.user;
-        if (_currentUser != null) {
+        if (event.user != null && (accountId == null || event.user!.id == accountId)) {
+          _currentUser = event.user;
           final authorization = await _currentUser!.authorizationClient.authorizationForScopes(scopes);
           if (authorization != null) {
             _authorization = authorization;
             final authClient = authorization.authClient(scopes: scopes);
             _driveApi = drive.DriveApi(authClient);
-            final prefs = await SharedPreferences.getInstance();
             await prefs.setBool('sync_drive_authorized', true);
+            await prefs.setString('google_account_id', _currentUser!.id);
             debugPrint('DriveService: Authentication event - signed in');
           } else {
             _currentUser = null;
@@ -142,8 +143,8 @@ class DriveService {
         _currentUser = null;
         _authorization = null;
         _driveApi = null;
-        final prefs = await SharedPreferences.getInstance();
         await prefs.setBool('sync_drive_authorized', false);
+        await prefs.remove('google_account_id');
         debugPrint('DriveService: Authentication event - signed out');
         break;
     }
@@ -151,47 +152,18 @@ class DriveService {
 
   Future<void> _handleAuthenticationError(Object e) async {
     debugPrint("DriveService: Authentication error: $e");
-    // Do not reset sync_drive_authorized; let sync retry
   }
 
   Future<bool> get isAuthorized async {
     final prefs = await SharedPreferences.getInstance();
-    if (!(prefs.getBool('sync_drive_authorized') ?? false)) {
-      debugPrint('DriveService: Not authorized in SharedPreferences');
-      return false;
-    }
-    final user = await _ensureSignedIn(isBackground: true);
-    return user != null && _authorization != null;
+    return prefs.getBool('sync_drive_authorized') ?? false;
   }
 
   Future<String?> get currentUserEmail async {
-    final user = await _ensureSignedIn(isBackground: true);
-    return user?.email;
-  }
-
-  Future<void> refreshToken() async {
-    await _initializeGoogleSignIn();
-    try {
-      final user = await _googleSignIn!.attemptLightweightAuthentication(reportAllExceptions: false);
-      if (user != null) {
-        final authorization = await user.authorizationClient.authorizationForScopes(scopes);
-        if (authorization != null) {
-          _currentUser = user;
-          _authorization = authorization;
-          final authClient = authorization.authClient(scopes: scopes);
-          _driveApi = drive.DriveApi(authClient);
-          final prefs = await SharedPreferences.getInstance();
-          await prefs.setBool('sync_drive_authorized', true);
-          debugPrint('DriveService: Token refreshed successfully');
-        } else {
-          debugPrint('DriveService: Token refresh failed: No authorization');
-        }
-      } else {
-        debugPrint('DriveService: Token refresh failed: No user');
-      }
-    } catch (e) {
-      debugPrint('DriveService: Token refresh failed: $e');
-    }
+    final prefs = await SharedPreferences.getInstance();
+    if (!(prefs.getBool('sync_drive_authorized') ?? false)) return null;
+    if (_currentUser != null) return _currentUser!.email;
+    return null;
   }
 
   Future<void> signIn() async {
@@ -211,10 +183,12 @@ class DriveService {
       _driveApi = drive.DriveApi(authClient);
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('sync_drive_authorized', true);
+      await prefs.setString('google_account_id', _currentUser!.id);
       debugPrint('DriveService: Signed in successfully');
     } catch (e) {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('sync_drive_authorized', false);
+      await prefs.remove('google_account_id');
       debugPrint("DriveService: Sign-in failed: $e");
       rethrow;
     } finally {
@@ -230,11 +204,21 @@ class DriveService {
     _driveApi = null;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('sync_drive_authorized', false);
+    await prefs.remove('google_account_id');
     debugPrint('DriveService: Signed out');
   }
 
   Future<Map<String, dynamic>> pullDeltas({bool isBackground = false}) async {
-    if (!await isAuthorized) throw Exception('Not authorized');
+    if (!await isAuthorized) {
+      if (isBackground) {
+        return {
+          'deltas': [],
+          'lastSyncTimestamp': DateTime(1970).toIso8601String(),
+          'version': '1.0.0',
+        };
+      }
+      throw Exception('Not authorized');
+    }
 
     final user = await _ensureSignedIn(isBackground: isBackground);
     if (user == null || _authorization == null) {
@@ -284,7 +268,10 @@ class DriveService {
   }
 
   Future<void> pushDeltas(Map<String, dynamic> deltaData, {bool isBackground = false}) async {
-    if (!await isAuthorized) throw Exception('Not authorized');
+    if (!await isAuthorized) {
+      if (isBackground) return;
+      throw Exception('Not authorized');
+    }
 
     final user = await _ensureSignedIn(isBackground: isBackground);
     if (user == null || _authorization == null) {
@@ -323,7 +310,10 @@ class DriveService {
   }
 
   Future<void> checkFolderAccess({bool isBackground = false}) async {
-    if (!await isAuthorized) throw Exception('Not authorized');
+    if (!await isAuthorized) {
+      if (isBackground) return;
+      throw Exception('Not authorized');
+    }
 
     final user = await _ensureSignedIn(isBackground: isBackground);
     if (user == null || _authorization == null) {
