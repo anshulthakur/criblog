@@ -14,6 +14,7 @@ class WidgetService {
   static const String _keyFeedingSource = 'feeding_source';
 
   static Future<Map<String, dynamic>> handleFeedingFromWidget() async {
+    debugPrint("handleFeedingFromWidget");
     try {
       final prefs = await SharedPreferences.getInstance();
       final wasOngoing = prefs.getBool(_keyOngoingFeeding) ?? false;
@@ -41,7 +42,7 @@ class WidgetService {
         await prefs.setBool(_keyOngoingFeeding, true);
         debugPrint('Set ongoing_feeding=true');
       }
-      await _updateWidgetFromPrefs();
+      await _updateWidgetFromPrefs(triggerUpdate: false);
       return {
         'feeding': !wasOngoing,
         'sleep': prefs.getBool(_keyOngoingSleep) ?? false,
@@ -89,7 +90,8 @@ class WidgetService {
     }
   }
 
-  static Future<void> syncAppToWidget() async {
+  static Future<void> syncAppToWidget({bool triggerUpdate = true}) async {
+    debugPrint("syncAppToWidget");
     try {
       final ongoingSleep = await DatabaseService().getOngoingSleep();
       final ongoingFeeding = await DatabaseService().getOngoingFeeding();
@@ -105,13 +107,15 @@ class WidgetService {
       }
       debugPrint('Prefs updated: sleep=${prefs.getBool(_keyOngoingSleep)}, feeding=${prefs.getBool(_keyOngoingFeeding)}, source=${prefs.getString(_keyFeedingSource)}');
 
-      await _updateWidgetFromPrefs();
+      await _updateWidgetFromPrefs(triggerUpdate: triggerUpdate);
     } catch (e) {
       debugPrint('Error syncing app to widget: $e');
     }
   }
 
-  static Future<void> _updateWidgetFromPrefs() async {
+
+  static Future<void> _updateWidgetFromPrefs({bool triggerUpdate = true}) async {
+    debugPrint("_updateWidgetFromPrefs");
     try {
       await Future.delayed(const Duration(milliseconds: 300));
       final prefs = await SharedPreferences.getInstance();
@@ -123,18 +127,15 @@ class WidgetService {
       await HomeWidget.saveWidgetData<bool>('ongoing_sleep', sleep);
       await HomeWidget.saveWidgetData<bool>('ongoing_feeding', feeding);
       await HomeWidget.saveWidgetData<String>('feeding_source', feedingSource);
-      debugPrint('Updating widget with name=WidgetProvider');
-      // Avoid multiple APPWIDGET_UPDATE broadcasts
-      // const platform = MethodChannel('me.bhaad.criblog/widget');
-      // await platform.invokeMethod('updateWidget').then((_) {
-      //   debugPrint('Broadcast sent to update widget');
-      // }).catchError((e) {
-      //   debugPrint('Failed to send broadcast to update widget: $e');
-      // });
-      await Future.delayed(const Duration(milliseconds: 300));
-      await HomeWidget.updateWidget(name: 'WidgetProvider');
-      debugPrint('Broadcast sent to update widget via HomeWidget.updateWidget');
 
+      if (triggerUpdate) {
+        debugPrint('Updating widget with name=WidgetProvider');
+        await Future.delayed(const Duration(milliseconds: 300));
+        await HomeWidget.updateWidget(name: 'WidgetProvider');
+        debugPrint('Broadcast sent to update widget via HomeWidget.updateWidget');
+      } else {
+        debugPrint('Skipped widget broadcast due to triggerUpdate=false');
+      }
     } catch (e) {
       debugPrint('Widget update failed: $e');
     }

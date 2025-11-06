@@ -14,11 +14,11 @@ class SyncService {
   bool _isSyncing = false; // Prevent concurrent syncs
 
   Future<bool> get isAuthorized async {
-    print('Check authorization');
+    debugPrint('Check authorization');
     final prefs = await SharedPreferences.getInstance();
     final authorized = prefs.getBool('sync_drive_authorized') ?? false;
     if (!authorized) return false;
-    print('Auth set in prefs, check drive');
+    debugPrint('Auth set in prefs, check drive');
     return await _driveService.isAuthorized;
   }
 
@@ -252,6 +252,7 @@ class SyncService {
   }
 
   Future<int> logFeedingInsert(FeedingEntry entry) async {
+    debugPrint("logFeedingInsert");
     final userEmail = await currentUserEmail ?? 'local';
     final updatedEntry = entry.copyWith(
       lastModified: entry.lastModified ?? DateTime.now(),
@@ -259,11 +260,12 @@ class SyncService {
     );
     final id = await _dbService.insertFeedingEntry(updatedEntry);
     await _triggerBackgroundSync();
-    await WidgetService.syncAppToWidget();
+    await WidgetService.syncAppToWidget(triggerUpdate: false);
     return id;
   }
 
   Future<void> logFeedingUpdate(FeedingEntry entry) async {
+    debugPrint("logFeedingUpdate");
     final userEmail = await currentUserEmail ?? 'local';
     final updatedEntry = entry.copyWith(
       lastModified: entry.lastModified ?? DateTime.now(),
@@ -271,13 +273,14 @@ class SyncService {
     );
     await _dbService.updateFeedingEntry(updatedEntry);
     await _triggerBackgroundSync();
-    await WidgetService.syncAppToWidget();
+    await WidgetService.syncAppToWidget(triggerUpdate: false);
   }
 
   Future<void> logFeedingDelete(int id) async {
+    debugPrint("logFeedingDelete");
     await _dbService.deleteFeedingEntry(id);
     await _triggerBackgroundSync();
-    await WidgetService.syncAppToWidget();
+    await WidgetService.syncAppToWidget(triggerUpdate: false);
   }
 }
 
