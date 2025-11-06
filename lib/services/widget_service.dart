@@ -16,7 +16,7 @@ class WidgetService {
   static Future<Map<String, dynamic>> handleFeedingFromWidget({AppState? appState}) async {
     debugPrint("handleFeedingFromWidget");
     try {
-      final syncService = SyncService(appState: appState);
+      final syncService = SyncService(); // No AppState in background
       final prefs = await SharedPreferences.getInstance();
       final wasOngoing = prefs.getBool(_keyOngoingFeeding) ?? false;
       debugPrint('Handling feeding action, wasOngoing: $wasOngoing');
@@ -64,7 +64,7 @@ class WidgetService {
   static Future<Map<String, dynamic>> handleSleepFromWidget({AppState? appState}) async {
     debugPrint("handleSleepFromWidget");
     try {
-      final syncService = SyncService(appState: appState);
+      final syncService = SyncService(); // No AppState in background
       final prefs = await SharedPreferences.getInstance();
       final wasOngoing = prefs.getBool(_keyOngoingSleep) ?? false;
       debugPrint('Handling sleep action, wasOngoing: $wasOngoing');
@@ -127,6 +127,7 @@ class WidgetService {
       await _updateWidgetFromPrefs(triggerUpdate: triggerUpdate);
       if (appState != null && (ongoingSleep != null || ongoingFeeding != null)) {
         appState.notifyDatabaseChanged();
+        debugPrint('syncAppToWidget: Notified AppState');
       }
     } catch (e) {
       debugPrint('Error syncing app to widget: $e');

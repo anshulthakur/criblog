@@ -22,20 +22,18 @@ void callbackDispatcher() {
   Workmanager().executeTask((task, inputData) async {
     debugPrint("Background task started: $task, inputData: $inputData");
     try {
-      // AppState is passed via inputData or created (non-UI context)
-      final appState = AppState();
       switch (task) {
         case 'immediate-sync':
-          final syncService = SyncService(appState: appState);
+          final syncService = SyncService();
           await syncService.sync(isBackground: true);
           debugPrint('Sync task completed: $task');
           break;
         case 'widget-feeding-toggle':
-          await WidgetService.handleFeedingFromWidget(appState: appState);
+          await WidgetService.handleFeedingFromWidget();
           debugPrint('Feeding toggle completed');
           break;
         case 'widget-sleep-toggle':
-          await WidgetService.handleSleepFromWidget(appState: appState);
+          await WidgetService.handleSleepFromWidget();
           debugPrint('Sleep toggle completed');
           break;
         default:
@@ -76,16 +74,21 @@ void main() async {
         debugPrint('MethodChannel handleAction: $type');
         Map<String, dynamic> result;
         if (type == 'feeding') {
-          result = await WidgetService.handleFeedingFromWidget(appState: appState);
+          result = await WidgetService.handleFeedingFromWidget();
           debugPrint('Handled feeding action via MethodChannel');
         } else if (type == 'sleep') {
-          result = await WidgetService.handleSleepFromWidget(appState: appState);
+          result = await WidgetService.handleSleepFromWidget();
           debugPrint('Handled sleep action via MethodChannel');
         } else {
           debugPrint('Unknown action type: $type');
           return null;
         }
+        appState.notifyDatabaseChanged();
         return result;
+      } else if (call.method == 'receiveWidgetUpdate') {
+        debugPrint('MethodChannel: Received widget update: ${call.arguments}');
+        appState.notifyDatabaseChanged();
+        return null;
       } else {
         debugPrint('Unknown MethodChannel method: ${call.method}');
         return null;
@@ -97,7 +100,7 @@ void main() async {
   });
 
   // Sync app state → widget on launch
-  await WidgetService.syncAppToWidget(appState: appState);
+  await WidgetService.syncAppToWidget(triggerUpdate: true, appState: appState);
 
   runApp(
     ChangeNotifierProvider(
@@ -118,14 +121,14 @@ class CribLogApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       initialRoute: '/',
       routes: {
-        '/': (_) => RootScaffold(child: const HomeScreen()),
+        '/': (_) => RootScaffold(child: HomeScreen()),
         '/entries': (_) => RootScaffold(child: const EntriesScreen()),
         '/settings': (_) => RootScaffold(child: const SettingsScreen()),
-        '/input': (_) => RootScaffold(child: const InputScreen()),
+        '/input': (_) => RootScaffold(child: InputScreen()),
       },
       onGenerateRoute: (settings) {
         return MaterialPageRoute(
-          builder: (_) => RootScaffold(child: const HomeScreen()),
+          builder: (_) => RootScaffold(child: HomeScreen()),
         );
       },
     );
@@ -198,25 +201,30 @@ class _RootScaffoldState extends State<RootScaffold> {
 
   @override
   Widget build(BuildContext context) {
-    return WillPopScope(
-      onWillPop: () async {
+    return PopScope(
+      canPop: false, // Prevent default pop
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return; // Already handled
         final routeName = ModalRoute.of(context)?.settings.name;
+        debugPrint('PopScope: onPopInvokedWithResult, route: $routeName, didPop: $didPop, result: $result');
         if (routeName == '/') {
-          SystemNavigator.pop();
-          return true;
+          // Move to background (like home button)
+          SystemNavigator.pop(animated: true);
+          return;
         } else if (routeName == '/settings') {
           if (_routeHistory.length > 1) {
             _routeHistory.removeLast();
             Navigator.pop(context);
-            return false;
+          } else {
+            _routeHistory.clear();
+            _routeHistory.add('/');
+            Navigator.pushReplacementNamed(context, '/');
           }
         } else {
           _routeHistory.clear();
           _routeHistory.add('/');
           Navigator.pushReplacementNamed(context, '/');
-          return false;
         }
-        return true;
       },
       child: Scaffold(
         appBar: AppBar(

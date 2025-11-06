@@ -59,7 +59,10 @@ class SyncService {
 
       await prefs.setString('sync_last_timestamp', DateTime.now().toIso8601String());
       await prefs.setString('sync_last_result', 'success');
-      _appState?.notifyDatabaseChanged();
+      if (!isBackground) {
+        _appState?.notifyDatabaseChanged();
+        debugPrint('Sync: Notified AppState');
+      }
     } catch (e) {
       await prefs.setString('sync_last_timestamp', DateTime.now().toIso8601String());
       await prefs.setString('sync_last_result', 'failed: $e');
@@ -87,7 +90,10 @@ class SyncService {
     }
 
     await prefs.setString('sync_last_timestamp', remoteTimestamp.toIso8601String());
-    _appState?.notifyDatabaseChanged();
+    if (!isBackground) {
+      _appState?.notifyDatabaseChanged();
+      debugPrint('PullAndMergeDeltas: Notified AppState');
+    }
   }
 
   Future<void> _pushPendingDeltas({bool isBackground = false}) async {
@@ -134,7 +140,10 @@ class SyncService {
     await _driveService.pushDeltas(pushData, isBackground: isBackground);
     await _dbService.markDeltasSynced(deltaIds);
     await _dbService.clearSyncedDeltas();
-    _appState?.notifyDatabaseChanged();
+    if (!isBackground) {
+      _appState?.notifyDatabaseChanged();
+      debugPrint('PushPendingDeltas: Notified AppState');
+    }
   }
 
   Future<void> _applyDelta(_Delta delta) async {
@@ -147,8 +156,10 @@ class SyncService {
           if (existing == null || delta.timestamp.isAfter(existing.lastModified)) {
             if (delta.type == 'insert') {
               await _dbService.insertSleepEntry(entry);
+              debugPrint('Applied delta: Inserted sleep entry $entry');
             } else {
               await _dbService.updateSleepEntry(entry);
+              debugPrint('Applied delta: Updated sleep entry $entry');
             }
           }
         } else {
@@ -157,8 +168,10 @@ class SyncService {
           if (existing == null || delta.timestamp.isAfter(existing.lastModified)) {
             if (delta.type == 'insert') {
               await _dbService.insertFeedingEntry(entry);
+              debugPrint('Applied delta: Inserted feeding entry $entry');
             } else {
               await _dbService.updateFeedingEntry(entry);
+              debugPrint('Applied delta: Updated feeding entry $entry');
             }
           }
         }
@@ -167,8 +180,10 @@ class SyncService {
         final id = delta.entryJson['id'] as int;
         if (delta.tableName == 'sleep_entries') {
           await _dbService.deleteSleepEntry(id);
+          debugPrint('Applied delta: Deleted sleep entry id=$id');
         } else {
           await _dbService.deleteFeedingEntry(id);
+          debugPrint('Applied delta: Deleted feeding entry id=$id');
         }
         break;
     }
@@ -190,6 +205,7 @@ class SyncService {
       modifiedBy: userEmail,
     );
     final id = await _dbService.insertSleepEntry(updatedEntry);
+    debugPrint('logSleepInsert: Inserted sleep entry id=$id');
     if (await isAuthorized) {
       try {
         await sync();
@@ -198,6 +214,7 @@ class SyncService {
       }
     }
     _appState?.notifyDatabaseChanged();
+    debugPrint('logSleepInsert: Notified AppState');
     return id;
   }
 
@@ -208,20 +225,21 @@ class SyncService {
       modifiedBy: userEmail,
     );
     await _dbService.updateSleepEntry(updatedEntry);
+    debugPrint('logSleepUpdate: Updated sleep entry $updatedEntry');
     if (await isAuthorized) {
       try {
         await sync();
-      } catch (e
-
-) {
+      } catch (e) {
         debugPrint('Sync after sleep update failed: $e');
       }
     }
     _appState?.notifyDatabaseChanged();
+    debugPrint('logSleepUpdate: Notified AppState');
   }
 
   Future<void> logSleepDelete(int id) async {
     await _dbService.deleteSleepEntry(id);
+    debugPrint('logSleepDelete: Deleted sleep entry id=$id');
     if (await isAuthorized) {
       try {
         await sync();
@@ -230,6 +248,7 @@ class SyncService {
       }
     }
     _appState?.notifyDatabaseChanged();
+    debugPrint('logSleepDelete: Notified AppState');
   }
 
   Future<int> logFeedingInsert(FeedingEntry entry) async {
@@ -240,15 +259,17 @@ class SyncService {
       modifiedBy: userEmail,
     );
     final id = await _dbService.insertFeedingEntry(updatedEntry);
+    debugPrint('logFeedingInsert: Inserted feeding entry id=$id');
     if (await isAuthorized) {
       try {
         await sync();
-        await WidgetService.syncAppToWidget(triggerUpdate: false, appState: _appState);
+        await WidgetService.syncAppToWidget(triggerUpdate: true, appState: _appState);
       } catch (e) {
         debugPrint('Sync after feeding insert failed: $e');
       }
     }
     _appState?.notifyDatabaseChanged();
+    debugPrint('logFeedingInsert: Notified AppState');
     return id;
   }
 
@@ -260,29 +281,33 @@ class SyncService {
       modifiedBy: userEmail,
     );
     await _dbService.updateFeedingEntry(updatedEntry);
+    debugPrint('logFeedingUpdate: Updated feeding entry $updatedEntry');
     if (await isAuthorized) {
       try {
         await sync();
-        await WidgetService.syncAppToWidget(triggerUpdate: false, appState: _appState);
+        await WidgetService.syncAppToWidget(triggerUpdate: true, appState: _appState);
       } catch (e) {
         debugPrint('Sync after feeding update failed: $e');
       }
     }
     _appState?.notifyDatabaseChanged();
+    debugPrint('logFeedingUpdate: Notified AppState');
   }
 
   Future<void> logFeedingDelete(int id) async {
     debugPrint("logFeedingDelete");
     await _dbService.deleteFeedingEntry(id);
+    debugPrint('logFeedingDelete: Deleted feeding entry id=$id');
     if (await isAuthorized) {
       try {
         await sync();
-        await WidgetService.syncAppToWidget(triggerUpdate: false, appState: _appState);
+        await WidgetService.syncAppToWidget(triggerUpdate: true, appState: _appState);
       } catch (e) {
         debugPrint('Sync after feeding delete failed: $e');
       }
     }
     _appState?.notifyDatabaseChanged();
+    debugPrint('logFeedingDelete: Notified AppState');
   }
 }
 

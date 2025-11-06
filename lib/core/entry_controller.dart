@@ -1,12 +1,11 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
 import '../services/database.dart';
 import '../services/sync_service.dart';
 import '../models/sleep_entry.dart';
 import '../models/feeding_entry.dart';
 import '../app_state.dart';
 
-mixin EntryController<T extends StatefulWidget> on State<T> {
+class EntryController extends ChangeNotifier {
   bool _isSleepOngoing = false;
   bool _isFeedingOngoing = false;
   SleepEntry? _lastSleep;
@@ -14,6 +13,7 @@ mixin EntryController<T extends StatefulWidget> on State<T> {
   FeedingSource _selectedSource = FeedingSource.breast;
   final _syncService = SyncService();
   final _dbService = DatabaseService();
+  late AppState _appState;
 
   bool get isSleepOngoing => _isSleepOngoing;
   bool get isFeedingOngoing => _isFeedingOngoing;
@@ -21,20 +21,17 @@ mixin EntryController<T extends StatefulWidget> on State<T> {
   SleepEntry? get lastSleep => _lastSleep;
   FeedingEntry? get lastFeeding => _lastFeeding;
 
-  @mustCallSuper
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<AppState>().addListener(_onAppStateChanged);
-      _refreshStatus();
-    });
+  EntryController(AppState appState) {
+    debugPrint('EntryController: Initialized');
+    _appState = appState;
+    _appState.addListener(_onAppStateChanged);
+    _refreshStatus();
   }
 
-  @mustCallSuper
   @override
   void dispose() {
-    context.read<AppState>().removeListener(_onAppStateChanged);
+    debugPrint('EntryController: dispose');
+    _appState.removeListener(_onAppStateChanged);
     super.dispose();
   }
 
@@ -52,18 +49,17 @@ mixin EntryController<T extends StatefulWidget> on State<T> {
     final ongoingSleep = await _dbService.getOngoingSleep();
     final ongoingFeeding = await _dbService.getOngoingFeeding();
 
-    setState(() {
-      _isSleepOngoing = ongoingSleep != null;
-      _lastSleep = ongoingSleep;
-      _isFeedingOngoing = ongoingFeeding != null;
-      _lastFeeding = ongoingFeeding;
-      _selectedSource = ongoingFeeding?.source ?? FeedingSource.breast;
-      debugPrint(
-          'EntryController: Updated state - sleep: $_isSleepOngoing, feeding: $_isFeedingOngoing, source: $_selectedSource');
-    });
+    _isSleepOngoing = ongoingSleep != null;
+    _lastSleep = ongoingSleep;
+    _isFeedingOngoing = ongoingFeeding != null;
+    _lastFeeding = ongoingFeeding;
+    _selectedSource = ongoingFeeding?.source ?? FeedingSource.breast;
+    debugPrint(
+        'EntryController: Updated state - sleep: $_isSleepOngoing, feeding: $_isFeedingOngoing, source: $_selectedSource');
+    notifyListeners();
   }
 
-  Future<void> toggleSleep() async {
+  Future<void> toggleSleep(BuildContext context) async {
     final now = DateTime.now();
     if (_isSleepOngoing) {
       final updated = SleepEntry(
@@ -75,11 +71,11 @@ mixin EntryController<T extends StatefulWidget> on State<T> {
       );
       try {
         await _syncService.logSleepUpdate(updated);
-        _snack('Sleep ended at ${_fmt(now)}');
+        _snack(context, 'Sleep ended at ${_fmt(now)}');
       } catch (e) {
-        _snack('Sleep ended, but sync failed: $e');
+        _snack(context, 'Sleep ended, but sync failed: $e');
       }
-      setState(() => _isSleepOngoing = false);
+      _isSleepOngoing = false;
     } else {
       final newEntry = SleepEntry(
         startTime: now,
@@ -89,19 +85,17 @@ mixin EntryController<T extends StatefulWidget> on State<T> {
       try {
         final insertedId = await _syncService.logSleepInsert(newEntry);
         final entryWithId = newEntry.copyWith(id: insertedId);
-        _snack('Sleep started at ${_fmt(now)}');
-        setState(() {
-          _isSleepOngoing = true;
-          _lastSleep = entryWithId;
-        });
+        _snack(context, 'Sleep started at ${_fmt(now)}');
+        _isSleepOngoing = true;
+        _lastSleep = entryWithId;
       } catch (e) {
-        _snack('Sleep started, but sync failed: $e');
+        _snack(context, 'Sleep started, but sync failed: $e');
       }
     }
     await _refreshStatus();
   }
 
-  Future<void> toggleFeeding() async {
+  Future<void> toggleFeeding(BuildContext context) async {
     final now = DateTime.now();
     if (_isFeedingOngoing) {
       final updated = FeedingEntry(
@@ -114,9 +108,9 @@ mixin EntryController<T extends StatefulWidget> on State<T> {
       );
       try {
         await _syncService.logFeedingUpdate(updated);
-        _snack('Feeding ended at ${_fmt(now)}');
+        _snack(context, 'Feeding ended at ${_fmt(now)}');
       } catch (e) {
-        _snack('Feeding ended, but sync failed: $e');
+        _snack(context, 'Feeding ended, but sync failed: $e');
       }
     } else {
       final newEntry = FeedingEntry(
@@ -129,25 +123,23 @@ mixin EntryController<T extends StatefulWidget> on State<T> {
       try {
         final insertedId = await _syncService.logFeedingInsert(newEntry);
         final entryWithId = newEntry.copyWith(id: insertedId);
-        _snack('Feeding (${_srcLabel(_selectedSource)}) started at ${_fmt(now)}');
-        setState(() {
-          _isFeedingOngoing = true;
-          _lastFeeding = entryWithId;
-        });
+        _snack(context, 'Feeding (${_srcLabel(_selectedSource)}) started at ${_fmt(now)}');
+        _isFeedingOngoing = true;
+        _lastFeeding = entryWithId;
       } catch (e) {
-        _snack('Feeding started, but sync failed: $e');
+        _snack(context, 'Feeding started, but sync failed: $e');
       }
     }
     await _refreshStatus();
   }
 
-  void setFeedingSource(FeedingSource source) => setState(() {
-        _selectedSource = source;
-        debugPrint('EntryController: Set feeding source to $source');
-      });
+  void setFeedingSource(FeedingSource source) {
+    _selectedSource = source;
+    debugPrint('EntryController: Set feeding source to $source');
+    notifyListeners();
+  }
 
-  void _snack(String msg) {
-    if (!mounted) return;
+  void _snack(BuildContext context, String msg) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 

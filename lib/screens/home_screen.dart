@@ -11,7 +11,7 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> with EntryController<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> {
   final ScrollController _scroll = ScrollController();
   bool _showBar = true;
   double _prev = 0.0;
@@ -19,7 +19,7 @@ class _HomeScreenState extends State<HomeScreen> with EntryController<HomeScreen
   @override
   void initState() {
     super.initState();
-    initEntryState();
+    debugPrint('HomeScreen: initState');
     _scroll.addListener(() {
       final cur = _scroll.offset;
       if (cur > _prev && cur > 100) {
@@ -39,39 +39,42 @@ class _HomeScreenState extends State<HomeScreen> with EntryController<HomeScreen
 
   @override
   Widget build(BuildContext context) {
-    debugPrint('HomeScreen: Rebuilding with showBar: $_showBar');
-    return Consumer<AppState>(
-      builder: (context, appState, child) {
-        debugPrint('HomeScreen: Consumer rebuilt, appState: $appState');
-        return Stack(
-          children: [
-            ListView(
-              controller: _scroll,
-              padding: const EdgeInsets.only(bottom: 80),
-              children: const [
-                Center(
-                  child: Padding(
-                    padding: EdgeInsets.all(32),
-                    child: Text(
-                      'Welcome to CribLog!\nDashboard coming soon.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 18),
+    debugPrint('HomeScreen: Building');
+    return ChangeNotifierProvider(
+      create: (_) => EntryController(Provider.of<AppState>(context, listen: false)),
+      child: Consumer<AppState>(
+        builder: (context, appState, child) {
+          debugPrint('HomeScreen: Consumer rebuilt, appState: $appState');
+          return Stack(
+            children: [
+              ListView(
+                controller: _scroll,
+                padding: const EdgeInsets.only(bottom: 80),
+                children: const [
+                  Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(32),
+                      child: Text(
+                        'Welcome to CribLog!\nDashboard coming soon.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(fontSize: 18),
+                      ),
                     ),
                   ),
-                ),
-                SizedBox(height: 1200), // Scrollable filler
-              ],
-            ),
-            AnimatedPositioned(
-              duration: const Duration(milliseconds: 250),
-              bottom: _showBar ? 0 : -80,
-              left: 0,
-              right: 0,
-              child: EntryBar(),
-            ),
-          ],
-        );
-      },
+                  SizedBox(height: 1200), // Scrollable filler
+                ],
+              ),
+              AnimatedPositioned(
+                duration: const Duration(milliseconds: 250),
+                bottom: _showBar ? 0 : -80,
+                left: 0,
+                right: 0,
+                child: const EntryBar(),
+              ),
+            ],
+          );
+        },
+      ),
     );
   }
 }

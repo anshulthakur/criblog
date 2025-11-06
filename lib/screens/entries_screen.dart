@@ -29,6 +29,14 @@ class _EntriesScreenState extends State<EntriesScreen> {
   final DatabaseService _dbService = DatabaseService();
   late final SyncService _syncService;
 
+  late AppState _appState;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _appState = context.read<AppState>(); // Safe here
+  }
+
   @override
   void initState() {
     super.initState();
@@ -39,7 +47,7 @@ class _EntriesScreenState extends State<EntriesScreen> {
 
   @override
   void dispose() {
-    context.read<AppState>().removeListener(_onAppStateChanged);
+    _appState.removeListener(_onAppStateChanged);
     super.dispose();
   }
 

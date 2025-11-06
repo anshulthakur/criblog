@@ -22,7 +22,6 @@ class WidgetWorker(context: Context, params: WorkerParameters) : Worker(context,
         return try {
             val type = inputData.getString("type") ?: return Result.failure()
             Log.d("WidgetWorker", "Processing type: $type")
-
             // Initialize FlutterEngine on main thread
             val result = runBlocking {
                 suspendCancellableCoroutine<Result> { continuation ->
@@ -37,12 +36,23 @@ class WidgetWorker(context: Context, params: WorkerParameters) : Worker(context,
                                 engine.dartExecutor.executeDartEntrypoint(DartExecutor.DartEntrypoint.createDefault())
                                 FlutterEngineCache.getInstance().put("criblog_engine", engine)
                             }
-
                             // Invoke MethodChannel
                             val channel = MethodChannel(engine.dartExecutor.binaryMessenger, "me.bhaad.criblog/widget")
                             channel.invokeMethod("handleAction", type, object : MethodChannel.Result {
                                 override fun success(result: Any?) {
                                     Log.d("WidgetWorker", "MethodChannel success for type: $type, result: $result")
+                                    // Notify Flutter app of widget update
+                                    channel.invokeMethod("receiveWidgetUpdate", type, object : MethodChannel.Result {
+                                        override fun success(result: Any?) {
+                                            Log.d("WidgetWorker", "receiveWidgetUpdate success for type: $type")
+                                        }
+                                        override fun error(errorCode: String, errorMessage: String?, errorDetails: Any?) {
+                                            Log.e("WidgetWorker", "receiveWidgetUpdate error: $errorCode, $errorMessage")
+                                        }
+                                        override fun notImplemented() {
+                                            Log.e("WidgetWorker", "receiveWidgetUpdate not implemented")
+                                        }
+                                    })
                                     // Update widget with result (expecting map with feeding, sleep, feedingSource)
                                     if (result is Map<*, *>) {
                                         val feeding = result["feeding"] as? Boolean ?: false
@@ -76,7 +86,6 @@ class WidgetWorker(context: Context, params: WorkerParameters) : Worker(context,
                     }
                 }
             }
-
             result
         } catch (e: Exception) {
             Log.e("WidgetWorker", "Work failed: $e")
