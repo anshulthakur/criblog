@@ -98,6 +98,7 @@ class SyncService {
     final deltas = syncResult['deltas'] as List;
     final prefs = await SharedPreferences.getInstance();
     final localSyncId = int.parse(prefs.getString('last_sync_id') ?? '0');
+    final deltaIds = <int>[];
 
     for (final deltaJson in deltas) {
       final delta = Delta.fromJson(deltaJson);
@@ -108,7 +109,17 @@ class SyncService {
         continue;
       }
 
-      await _applyDelta(delta);
+      final deltaId = await _applyDelta(delta);
+      if (deltaId != null) {
+        deltaIds.add(deltaId);
+        debugPrint('PullAndMergeDeltas: Collected deltaId=$deltaId for server-pulled delta');
+      }
+    }
+
+    if (deltaIds.isNotEmpty) {
+      await _dbService.markDeltasSynced(deltaIds);
+      await _dbService.clearSyncedDeltas();
+      debugPrint('PullAndMergeDeltas: Marked ${deltaIds.length} deltas as synced and cleared');
     }
 
     await prefs.setString('last_sync_id', syncResult['lastSyncId']);
@@ -156,7 +167,8 @@ class SyncService {
     }
   }
 
-  Future<void> _applyDelta(Delta delta) async {
+
+  Future<int?> _applyDelta(Delta delta) async {
     final tableName = delta.table == 'feeding' ? 'feeding_entries' : 'sleep_entries';
     final id = int.parse(delta.data['id']);
     final deltaTimestamp = int.parse(delta.timestamp);
@@ -169,11 +181,13 @@ class SyncService {
         if (existing == null || deltaTimestamp >= existingTimestamp) {
           final entry = SleepEntry.fromJson(entryJson);
           if (delta.operation == 'insert') {
-            await _dbService.insertSleepEntry(entry);
-            debugPrint('Applied delta: Inserted sleep entry id=$id');
+            final insertedId = await _dbService.insertSleepEntry(entry);
+            debugPrint('Applied delta: Inserted sleep entry id=$id as id=$insertedId');
+            return insertedId;
           } else {
             await _dbService.updateSleepEntry(entry);
             debugPrint('Applied delta: Updated sleep entry id=$id');
+            return id;
           }
         } else {
           debugPrint('Skipped delta: Existing sleep entry id=$id, lastModified=$existingTimestamp >= delta.timestamp=$deltaTimestamp');
@@ -184,11 +198,13 @@ class SyncService {
         if (existing == null || deltaTimestamp >= existingTimestamp) {
           final entry = FeedingEntry.fromJson(entryJson);
           if (delta.operation == 'insert') {
-            await _dbService.insertFeedingEntry(entry);
-            debugPrint('Applied delta: Inserted feeding entry id=$id');
+            final insertedId = await _dbService.insertFeedingEntry(entry);
+            debugPrint('Applied delta: Inserted feeding entry id=$id as id=$insertedId');
+            return insertedId;
           } else {
             await _dbService.updateFeedingEntry(entry);
             debugPrint('Applied delta: Updated feeding entry id=$id');
+            return id;
           }
         } else {
           debugPrint('Skipped delta: Existing feeding entry id=$id, lastModified=$existingTimestamp >= delta.timestamp=$deltaTimestamp');
@@ -203,6 +219,7 @@ class SyncService {
         debugPrint('Applied delta: Deleted feeding entry id=$id');
       }
     }
+    return null;
   }
 
   Future<bool> _hasPendingPush() async {
@@ -210,7 +227,7 @@ class SyncService {
     debugPrint('Pending deltas count: ${deltas.length}');
     return deltas.isNotEmpty;
   }
-  
+
   Future<int> logSleepInsert(SleepEntry entry) async {
     final userEmail = await currentUserEmail;
     final updatedEntry = entry.copyWith(

@@ -73,9 +73,9 @@ class DriveService {
       await prefs.setString('google_user_name', user.displayName ?? user.email);
       debugPrint('DriveService: Stored user email=${user.email}, name=${user.displayName}');
 
-      print("Disconnecting");
-      await _googleSignIn!.disconnect();
-      print("Disconnected now");
+      // print("Disconnecting");
+      // await _googleSignIn!.disconnect();
+      // print("Disconnected now");
     } on GoogleSignInException catch (e) {
       debugPrint('DriveService: Google Sign-In error: ${e.code} - $e');
       rethrow;
