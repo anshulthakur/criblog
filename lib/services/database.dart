@@ -1,5 +1,5 @@
-import 'dart:convert'; // Added for json.encode
-import 'package:flutter/material.dart'; // For TimeOfDay
+import 'dart:convert';
+import 'package:flutter/material.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import '../models/sleep_entry.dart';
@@ -82,6 +82,38 @@ class DatabaseService {
     );
   }
 
+  // Convert database entry to delta data format
+  Map<String, dynamic> _entryToDeltaData(Map<String, dynamic> entry) {
+    final startTime = DateTime.parse(entry['startTime']);
+    final endTime = entry['endTime'] != null ? DateTime.parse(entry['endTime']) : null;
+    return {
+      'id': entry['id'].toString(),
+      'start_date': startTime.toIso8601String().split('T')[0],
+      'start_time': startTime.toIso8601String().split('T')[1].split('.')[0],
+      'end_date': endTime?.toIso8601String().split('T')[0],
+      'end_time': endTime?.toIso8601String().split('T')[1].split('.')[0],
+      'source': entry['source'], // Only for feeding_entries
+      'lastModified': entry['lastModified'],
+      'modifiedBy': entry['modifiedBy'],
+    }..removeWhere((key, value) => value == null);
+  }
+
+  // Convert delta data to database entry
+  Map<String, dynamic> deltaDataToEntry(Map<String, dynamic> data, String tableName) {
+    final startTime = DateTime.parse('${data['start_date']}T${data['start_time']}');
+    final endTime = data['end_date'] != null && data['end_time'] != null
+        ? DateTime.parse('${data['end_date']}T${data['end_time']}')
+        : null;
+    return {
+      'id': int.parse(data['id']),
+      'startTime': startTime.toIso8601String(),
+      'endTime': endTime?.toIso8601String(),
+      'source': tableName == 'feeding_entries' ? data['source'] : null,
+      'lastModified': data['lastModified'] ?? DateTime.now().toIso8601String(),
+      'modifiedBy': data['modifiedBy'] ?? 'remote',
+    }..removeWhere((key, value) => value == null);
+  }
+
   // === Pending Deltas ===
   Future<void> addPendingDelta({
     required String type,
@@ -96,17 +128,26 @@ class DatabaseService {
       {
         'type': type,
         'table_name': tableName,
-        'entry_json': json.encode(entryJson),
+        'entry_json': json.encode(_entryToDeltaData(entryJson)),
         'timestamp': timestamp,
         'modified_by': modifiedBy,
         'synced': 0,
       },
+      conflictAlgorithm: ConflictAlgorithm.replace,
     );
   }
 
   Future<List<Map<String, dynamic>>> getPendingDeltas() async {
     final db = await database;
-    return await db.query('pending_deltas', where: 'synced = ?', whereArgs: [0]);
+    final deltas = await db.query('pending_deltas', where: 'synced = ?', whereArgs: [0]);
+    return deltas.map((delta) => {
+      'id': delta['id'],
+      'timestamp': DateTime.parse(delta['timestamp'] as String).millisecondsSinceEpoch.toString(),
+      'operation': delta['type'],
+      'table': delta['table_name'] == 'feeding_entries' ? 'feeding' : 'sleeping',
+      'data': json.decode(delta['entry_json'] as String),
+      'modified_by': delta['modified_by'],
+    }).toList();
   }
 
   Future<void> markDeltasSynced(List<int> ids) async {
@@ -136,15 +177,15 @@ class DatabaseService {
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
     debugPrint('Inserted sleep entry with id: $id');
-    
+
     await addPendingDelta(
       type: 'insert',
       tableName: 'sleep_entries',
-      entryJson: entryWithDefaults.copyWith(id: id).toJson(),
+      entryJson: entryWithDefaults.copyWith(id: id).toMap(),
       timestamp: entryWithDefaults.lastModified.toIso8601String(),
       modifiedBy: entryWithDefaults.modifiedBy,
     );
-    
+
     return id;
   }
 
@@ -156,7 +197,7 @@ class DatabaseService {
 
   Future<SleepEntry?> getSleepEntryById(int id) async {
     final db = await database;
-    final maps = await db.query('sleep_entries', where: 'id = ?', whereArgs: [id]); // Fixed typo: removed scel_id
+    final maps = await db.query('sleep_entries', where: 'id = ?', whereArgs: [id]);
     if (maps.isNotEmpty) {
       return SleepEntry.fromMap(maps.first);
     }
@@ -180,11 +221,11 @@ class DatabaseService {
       whereArgs: [entry.id],
     );
     debugPrint('updateSleepEntry: updated $count rows');
-    
+
     await addPendingDelta(
       type: 'update',
       tableName: 'sleep_entries',
-      entryJson: entryWithDefaults.toJson(),
+      entryJson: entryWithDefaults.toMap(),
       timestamp: entryWithDefaults.lastModified.toIso8601String(),
       modifiedBy: entryWithDefaults.modifiedBy,
     );
@@ -193,7 +234,7 @@ class DatabaseService {
   Future<void> deleteSleepEntry(int id) async {
     final db = await database;
     await db.delete('sleep_entries', where: 'id = ?', whereArgs: [id]);
-    
+
     await addPendingDelta(
       type: 'delete',
       tableName: 'sleep_entries',
@@ -216,15 +257,15 @@ class DatabaseService {
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
     debugPrint('Inserted feeding entry with id: $id');
-    
+
     await addPendingDelta(
       type: 'insert',
       tableName: 'feeding_entries',
-      entryJson: entryWithDefaults.copyWith(id: id).toJson(),
+      entryJson: entryWithDefaults.copyWith(id: id).toMap(),
       timestamp: entryWithDefaults.lastModified.toIso8601String(),
       modifiedBy: entryWithDefaults.modifiedBy,
     );
-    
+
     return id;
   }
 
@@ -260,11 +301,11 @@ class DatabaseService {
       whereArgs: [entry.id],
     );
     debugPrint('updateFeedingEntry: updated $count rows');
-    
+
     await addPendingDelta(
       type: 'update',
       tableName: 'feeding_entries',
-      entryJson: entryWithDefaults.toJson(),
+      entryJson: entryWithDefaults.toMap(),
       timestamp: entryWithDefaults.lastModified.toIso8601String(),
       modifiedBy: entryWithDefaults.modifiedBy,
     );
@@ -273,7 +314,7 @@ class DatabaseService {
   Future<void> deleteFeedingEntry(int id) async {
     final db = await database;
     await db.delete('feeding_entries', where: 'id = ?', whereArgs: [id]);
-    
+
     await addPendingDelta(
       type: 'delete',
       tableName: 'feeding_entries',
@@ -292,6 +333,22 @@ class DatabaseService {
   Future<FeedingEntry?> getOngoingFeeding() async {
     final entries = await getFeedingEntries();
     return entries.isNotEmpty && entries.first.endTime == null ? entries.first : null;
+  }
+
+  Future<List<Map<String, dynamic>>> getDeltasSince(String lastSyncId) async {
+    final db = await database;
+    final results = await db.query(
+      'pending_deltas',
+      where: 'synced = ? AND CAST(strftime(\'%s\', timestamp) AS INTEGER) * 1000 > ?',
+      whereArgs: [0, int.parse(lastSyncId)],
+    );
+    return results.map((delta) => {
+      'timestamp': DateTime.parse(delta['timestamp'] as String).millisecondsSinceEpoch.toString(),
+      'operation': delta['type'],
+      'table': delta['table_name'] == 'feeding_entries' ? 'feeding' : 'sleeping',
+      'data': json.decode(delta['entry_json'] as String),
+      'modified_by': delta['modified_by'],
+    }).toList();
   }
 
   // === Combined Queries for Pagination ===

@@ -14,6 +14,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final SyncService _syncService = SyncService();
   final DriveService _driveService = DriveService();
   bool _isSigningIn = false;
+  bool _isSyncing = false;
 
   @override
   Widget build(BuildContext context) {
@@ -22,55 +23,42 @@ class _SettingsScreenState extends State<SettingsScreen> {
       children: [
         Card(
           child: ListTile(
-            title: const Text('Google Drive Sync'),
-            subtitle: const Text('Backup and sync across devices'),
-            trailing: FutureBuilder<bool>(
-              future: _syncService.isAuthorized,
+            title: const Text('User Account'),
+            subtitle: FutureBuilder<String?>(
+              future: _driveService.currentUserEmail,
               builder: (context, snapshot) {
-                final isAuthorized = snapshot.data ?? false;
+                if (snapshot.hasData && snapshot.data != null) {
+                  return Text('Signed in as ${snapshot.data}');
+                }
+                return const Text('Sign in to identify your account');
+              },
+            ),
+            trailing: FutureBuilder<String?>(
+              future: _driveService.currentUserEmail,
+              builder: (context, snapshot) {
+                if (snapshot.hasData && snapshot.data != null) {
+                  return ElevatedButton(
+                    onPressed: _isSigningIn ? null : _signOut,
+                    child: const Text('Sign Out'),
+                  );
+                }
                 return ElevatedButton(
-                  onPressed: _isSigningIn ? null : _authorize,
-                  child: Text(isAuthorized ? 'Re-authorize' : 'Authorize'),
+                  onPressed: _isSigningIn ? null : _signIn,
+                  child: const Text('Login using Google'),
                 );
               },
             ),
           ),
         ),
-        FutureBuilder<bool>(
-          future: _syncService.isAuthorized,
-          builder: (context, snapshot) {
-            final isAuthorized = snapshot.data ?? false;
-            return Visibility(
-              visible: isAuthorized,
-              child: Card(
-                child: ListTile(
-                  title: const Text('Sign Out'),
-                  subtitle: const Text('Disconnect from Google Drive'),
-                  trailing: ElevatedButton(
-                    onPressed: _isSigningIn ? null : _signOut,
-                    child: const Text('Sign Out'),
-                  ),
-                ),
-              ),
-            );
-          },
-        ),
-        FutureBuilder<bool>(
-          future: _syncService.isAuthorized,
-          builder: (context, snapshot) {
-            final isAuthorized = snapshot.data ?? false;
-            return Visibility(
-              visible: isAuthorized,
-              child: ListTile(
-                title: const Text('Shared Folder'),
-                subtitle: Text('Folder ID: ${_driveService.folderId.substring(0, 20)}...'),
-                trailing: const Icon(Icons.folder),
-                onTap: () {
-                  // TODO: Copy folder ID to clipboard
-                },
-              ),
-            );
-          },
+        Card(
+          child: ListTile(
+            title: const Text('Manual Sync'),
+            subtitle: const Text('Sync data with Google Sheets'),
+            trailing: ElevatedButton(
+              onPressed: _isSyncing ? null : _manualSync,
+              child: const Text('Sync Now'),
+            ),
+          ),
         ),
         const Divider(),
         FutureBuilder<SharedPreferences>(
@@ -78,17 +66,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
           builder: (context, snapshot) {
             if (!snapshot.hasData) return const SizedBox();
             final prefs = snapshot.data!;
-            final timestamp = prefs.getString('sync_last_timestamp');
+            final lastSyncId = prefs.getString('last_sync_id');
             final result = prefs.getString('sync_last_result');
             return Card(
               child: ListTile(
                 title: const Text('Last Sync'),
                 subtitle: Text(
-                  timestamp != null
-                      ? 'At ${DateTime.parse(timestamp).toLocal().toString().substring(0, 16)}'
+                  lastSyncId != null && lastSyncId != '0'
+                      ? 'At ${DateTime.fromMillisecondsSinceEpoch(int.parse(lastSyncId)).toLocal().toString().substring(0, 16)}'
                       : 'Never',
                 ),
-                trailing: timestamp != null && result == 'success'
+                trailing: lastSyncId != null && result == 'success'
                     ? const Icon(Icons.check_circle, color: Colors.green)
                     : const Icon(Icons.error, color: Colors.red),
               ),
@@ -99,20 +87,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Future<void> _authorize() async {
+  Future<void> _signIn() async {
     setState(() => _isSigningIn = true);
     try {
-      await _driveService.signIn();
+      await _driveService.signInAndStoreUser();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Drive authorized successfully')),
+          const SnackBar(content: Text('Signed in successfully')),
         );
       }
       setState(() {});
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Authorization failed: $e')),
+          SnackBar(content: Text('Sign-in failed: $e')),
         );
       }
     }
@@ -125,17 +113,37 @@ class _SettingsScreenState extends State<SettingsScreen> {
       await _driveService.signOut();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Signed out from Google Drive')),
+          const SnackBar(content: Text('Signed out successfully')),
         );
       }
       setState(() {});
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Sign out failed: $e')),
+          SnackBar(content: Text('Sign-out failed: $e')),
         );
       }
     }
     setState(() => _isSigningIn = false);
+  }
+
+  Future<void> _manualSync() async {
+    setState(() => _isSyncing = true);
+    try {
+      await _syncService.sync();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Sync completed successfully')),
+        );
+      }
+      setState(() {});
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Sync failed: $e')),
+        );
+      }
+    }
+    setState(() => _isSyncing = false);
   }
 }

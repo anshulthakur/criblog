@@ -3,10 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:workmanager/workmanager.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:home_widget/home_widget.dart';
 import 'package:provider/provider.dart';
 import 'services/database.dart';
-import 'services/drive_service.dart';
 import 'services/sync_service.dart';
 import 'services/widget_service.dart';
 import 'screens/home_screen.dart';
@@ -58,7 +56,6 @@ void main() async {
   // Init WorkManager
   await Workmanager().initialize(
     callbackDispatcher,
-    isInDebugMode: true,
   );
 
   // Create single AppState instance
@@ -176,19 +173,11 @@ class _RootScaffoldState extends State<RootScaffold> {
 
   Future<void> _sync() async {
     try {
-      if (await syncService.isDriveAuthorized) {
-        await syncService.sync();
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Synced successfully')),
-          );
-        }
-      } else {
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Please authorize Google Drive in Settings')),
-          );
-        }
+      await syncService.sync();
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Synced successfully')),
+        );
       }
     } catch (e) {
       if (context.mounted) {
@@ -236,22 +225,23 @@ class _RootScaffoldState extends State<RootScaffold> {
               builder: (context, snapshot) {
                 if (!snapshot.hasData) return const SizedBox();
                 final prefs = snapshot.data!;
-                final authorized = prefs.getBool('sync_drive_authorized') ?? false;
-                final timestamp = prefs.getString('sync_last_timestamp');
-
+                final lastSyncId = prefs.getString('last_sync_id');
                 return Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     IconButton(
                       icon: const Icon(Icons.sync),
-                      onPressed: authorized ? _sync : null,
-                      tooltip: authorized ? 'Sync Now' : 'Authorize Drive in Settings',
+                      onPressed: _sync,
+                      tooltip: 'Sync Now',
                     ),
-                    if (timestamp != null)
+                    if (lastSyncId != null && lastSyncId != '0')
                       Padding(
                         padding: const EdgeInsets.only(right: 8),
                         child: Text(
-                          DateTime.parse(timestamp).toLocal().toString().substring(11, 16),
+                          DateTime.fromMillisecondsSinceEpoch(int.parse(lastSyncId))
+                              .toLocal()
+                              .toString()
+                              .substring(11, 16),
                           style: const TextStyle(fontSize: 12),
                         ),
                       ),
