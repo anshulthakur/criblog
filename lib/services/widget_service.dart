@@ -15,7 +15,7 @@ class WidgetService {
   static Future<Map<String, dynamic>> handleFeedingFromWidget({AppState? appState}) async {
     debugPrint("handleFeedingFromWidget");
     try {
-      final syncService = SyncService(); // No AppState in background
+      final syncService = SyncService(appState: appState);
       final prefs = await SharedPreferences.getInstance();
       final wasOngoing = prefs.getBool(_keyOngoingFeeding) ?? false;
       debugPrint('Handling feeding action, wasOngoing: $wasOngoing');
@@ -48,7 +48,7 @@ class WidgetService {
         await prefs.setBool(_keyOngoingFeeding, true);
         debugPrint('Set ongoing_feeding=true');
       }
-      await _updateWidgetFromPrefs(triggerUpdate: false);
+      await _updateWidgetFromPrefs(triggerUpdate: appState != null);
       return {
         'feeding': !wasOngoing,
         'sleep': prefs.getBool(_keyOngoingSleep) ?? false,
@@ -63,7 +63,7 @@ class WidgetService {
   static Future<Map<String, dynamic>> handleSleepFromWidget({AppState? appState}) async {
     debugPrint("handleSleepFromWidget");
     try {
-      final syncService = SyncService(); // No AppState in background
+      final syncService = SyncService(appState: appState);
       final prefs = await SharedPreferences.getInstance();
       final wasOngoing = prefs.getBool(_keyOngoingSleep) ?? false;
       debugPrint('Handling sleep action, wasOngoing: $wasOngoing');
@@ -94,7 +94,7 @@ class WidgetService {
         await prefs.setBool(_keyOngoingSleep, true);
         debugPrint('Set ongoing_sleep=true');
       }
-      await _updateWidgetFromPrefs();
+      await _updateWidgetFromPrefs(triggerUpdate: appState != null);
       return {
         'feeding': prefs.getBool(_keyOngoingFeeding) ?? false,
         'sleep': !wasOngoing,

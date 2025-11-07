@@ -9,6 +9,8 @@ import '../models/feeding_entry.dart';
 import 'widget_service.dart';
 import '../app_state.dart';
 
+const String syncTaskKey = 'immediate-sync'; // Match main.dart
+
 class SyncService {
   final DriveService _driveService = DriveService();
   final DatabaseService _dbService = DatabaseService();
@@ -19,6 +21,26 @@ class SyncService {
 
   Future<String?> get currentUserEmail async {
     return await _driveService.currentUserEmail ?? 'local';
+  }
+
+  Future<void> scheduleSync() async {
+    try {
+      await Workmanager().registerOneOffTask(
+        syncTaskKey,
+        syncTaskKey,
+        inputData: {'isBackground': true},
+        initialDelay: Duration(seconds: 5), // Batch changes
+        constraints: Constraints(
+          networkType: NetworkType.connected,
+          requiresCharging: false,
+        ),
+        backoffPolicy: BackoffPolicy.exponential,
+        backoffPolicyDelay: Duration(seconds: 10),
+      );
+      debugPrint('SyncService: Scheduled background sync task: $syncTaskKey');
+    } catch (e) {
+      debugPrint('SyncService: Failed to schedule sync task: $e');
+    }
   }
 
   Future<void> sync({bool forcePull = false, bool isBackground = false, int retryCount = 3}) async {
@@ -36,21 +58,11 @@ class SyncService {
         final syncResult = await _driveService.checkSync(lastSyncId);
         debugPrint('SyncService: Check sync result: ${syncResult['status']}');
 
-        if (syncResult['status'] == 'sync_ok') {
-          debugPrint('SyncService: Everything in sync');
-          await prefs.setString('last_sync_id', syncResult['lastSyncId']);
-          await prefs.setString('sync_last_result', 'success');
-          if (!isBackground) {
-            _appState?.notifyDatabaseChanged();
-            debugPrint('Sync: Notified AppState');
-          }
-          return;
-        }
-
         if (syncResult['status'] == 'updates_needed' || forcePull) {
           await _pullAndMergeDeltas(syncResult, isBackground: isBackground);
         }
 
+        // Always check for pending deltas, even for sync_ok
         if (await _hasPendingPush()) {
           await _pushPendingDeltas(syncResult['lastSyncId'], isBackground: isBackground);
         } else {
@@ -61,6 +73,10 @@ class SyncService {
         if (!isBackground) {
           _appState?.notifyDatabaseChanged();
           debugPrint('Sync: Notified AppState');
+        }
+        // Update widget after sync in background
+        if (isBackground) {
+          await WidgetService.syncAppToWidget(triggerUpdate: true, appState: null);
         }
         return;
       } catch (e) {
@@ -194,7 +210,7 @@ class SyncService {
     debugPrint('Pending deltas count: ${deltas.length}');
     return deltas.isNotEmpty;
   }
-
+  
   Future<int> logSleepInsert(SleepEntry entry) async {
     final userEmail = await currentUserEmail;
     final updatedEntry = entry.copyWith(
@@ -204,9 +220,9 @@ class SyncService {
     final id = await _dbService.insertSleepEntry(updatedEntry);
     debugPrint('logSleepInsert: Inserted sleep entry id=$id');
     try {
-      await sync();
+      await scheduleSync();
     } catch (e) {
-      debugPrint('Sync after sleep insert failed: $e');
+      debugPrint('Scheduling sync after sleep insert failed: $e');
     }
     _appState?.notifyDatabaseChanged();
     debugPrint('logSleepInsert: Notified AppState');
@@ -222,9 +238,9 @@ class SyncService {
     await _dbService.updateSleepEntry(updatedEntry);
     debugPrint('logSleepUpdate: Updated sleep entry $updatedEntry');
     try {
-      await sync();
+      await scheduleSync();
     } catch (e) {
-      debugPrint('Sync after sleep update failed: $e');
+      debugPrint('Scheduling sync after sleep update failed: $e');
     }
     _appState?.notifyDatabaseChanged();
     debugPrint('logSleepUpdate: Notified AppState');
@@ -234,9 +250,9 @@ class SyncService {
     await _dbService.deleteSleepEntry(id);
     debugPrint('logSleepDelete: Deleted sleep entry id=$id');
     try {
-      await sync();
+      await scheduleSync();
     } catch (e) {
-      debugPrint('Sync after sleep delete failed: $e');
+      debugPrint('Scheduling sync after sleep delete failed: $e');
     }
     _appState?.notifyDatabaseChanged();
     debugPrint('logSleepDelete: Notified AppState');
@@ -252,10 +268,10 @@ class SyncService {
     final id = await _dbService.insertFeedingEntry(updatedEntry);
     debugPrint('logFeedingInsert: Inserted feeding entry id=$id');
     try {
-      await sync();
+      await scheduleSync();
       await WidgetService.syncAppToWidget(triggerUpdate: true, appState: _appState);
     } catch (e) {
-      debugPrint('Sync after feeding insert failed: $e');
+      debugPrint('Scheduling sync after feeding insert failed: $e');
     }
     _appState?.notifyDatabaseChanged();
     debugPrint('logFeedingInsert: Notified AppState');
@@ -272,10 +288,10 @@ class SyncService {
     await _dbService.updateFeedingEntry(updatedEntry);
     debugPrint('logFeedingUpdate: Updated feeding entry $updatedEntry');
     try {
-      await sync();
+      await scheduleSync();
       await WidgetService.syncAppToWidget(triggerUpdate: true, appState: _appState);
     } catch (e) {
-      debugPrint('Sync after feeding update failed: $e');
+      debugPrint('Scheduling sync after feeding update failed: $e');
     }
     _appState?.notifyDatabaseChanged();
     debugPrint('logFeedingUpdate: Notified AppState');
@@ -286,10 +302,10 @@ class SyncService {
     await _dbService.deleteFeedingEntry(id);
     debugPrint('logFeedingDelete: Deleted feeding entry id=$id');
     try {
-      await sync();
+      await scheduleSync();
       await WidgetService.syncAppToWidget(triggerUpdate: true, appState: _appState);
     } catch (e) {
-      debugPrint('Sync after feeding delete failed: $e');
+      debugPrint('Scheduling sync after feeding delete failed: $e');
     }
     _appState?.notifyDatabaseChanged();
     debugPrint('logFeedingDelete: Notified AppState');

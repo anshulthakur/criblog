@@ -1,5 +1,5 @@
-const SHEET_ID = '<sheet_id>';
-const API_KEY = '<key>';
+const SHEET_ID = '138TnlXymuLKEh9HVnqHa4dhuf3p6fns6K0jmGAeqVB0';
+const API_KEY = 'criblog@123@criblog';
 
 function doPost(e) {
   try {

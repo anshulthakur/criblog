@@ -69,12 +69,8 @@ class EntryController extends ChangeNotifier {
         lastModified: now,
         modifiedBy: await _syncService.currentUserEmail ?? 'local',
       );
-      try {
-        await _syncService.logSleepUpdate(updated);
-        _snack(context, 'Sleep ended at ${_fmt(now)}');
-      } catch (e) {
-        _snack(context, 'Sleep ended, but sync failed: $e');
-      }
+      await _syncService.logSleepUpdate(updated);
+      _snack(context, 'Sleep ended at ${_fmt(now)}');
       _isSleepOngoing = false;
     } else {
       final newEntry = SleepEntry(
@@ -82,15 +78,11 @@ class EntryController extends ChangeNotifier {
         lastModified: now,
         modifiedBy: await _syncService.currentUserEmail ?? 'local',
       );
-      try {
-        final insertedId = await _syncService.logSleepInsert(newEntry);
-        final entryWithId = newEntry.copyWith(id: insertedId);
-        _snack(context, 'Sleep started at ${_fmt(now)}');
-        _isSleepOngoing = true;
-        _lastSleep = entryWithId;
-      } catch (e) {
-        _snack(context, 'Sleep started, but sync failed: $e');
-      }
+      final insertedId = await _syncService.logSleepInsert(newEntry);
+      final entryWithId = newEntry.copyWith(id: insertedId);
+      _snack(context, 'Sleep started at ${_fmt(now)}');
+      _isSleepOngoing = true;
+      _lastSleep = entryWithId;
     }
     await _refreshStatus();
   }
@@ -106,12 +98,8 @@ class EntryController extends ChangeNotifier {
         lastModified: now,
         modifiedBy: await _syncService.currentUserEmail ?? 'local',
       );
-      try {
-        await _syncService.logFeedingUpdate(updated);
-        _snack(context, 'Feeding ended at ${_fmt(now)}');
-      } catch (e) {
-        _snack(context, 'Feeding ended, but sync failed: $e');
-      }
+      await _syncService.logFeedingUpdate(updated);
+      _snack(context, 'Feeding ended at ${_fmt(now)}');
     } else {
       final newEntry = FeedingEntry(
         startTime: now,
@@ -120,15 +108,11 @@ class EntryController extends ChangeNotifier {
         lastModified: now,
         modifiedBy: await _syncService.currentUserEmail ?? 'local',
       );
-      try {
-        final insertedId = await _syncService.logFeedingInsert(newEntry);
-        final entryWithId = newEntry.copyWith(id: insertedId);
-        _snack(context, 'Feeding (${_srcLabel(_selectedSource)}) started at ${_fmt(now)}');
-        _isFeedingOngoing = true;
-        _lastFeeding = entryWithId;
-      } catch (e) {
-        _snack(context, 'Feeding started, but sync failed: $e');
-      }
+      final insertedId = await _syncService.logFeedingInsert(newEntry);
+      final entryWithId = newEntry.copyWith(id: insertedId);
+      _snack(context, 'Feeding (${_srcLabel(_selectedSource)}) started at ${_fmt(now)}');
+      _isFeedingOngoing = true;
+      _lastFeeding = entryWithId;
     }
     await _refreshStatus();
   }
